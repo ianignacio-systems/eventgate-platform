@@ -2,7 +2,7 @@
 
 **Version 1.1** · 23 October 2026 · Jupiter Systems, Inc.
 
-What's new in 1.1: up to 2 images per event, optimized automatically on upload; each image placed and sized on its own on the registration page, in the email and on the name tag; "the" before the event name in the email's closing line; clients with their own client administrators, who create and manage their own events and accounts; a raffle with a projector draw screen.
+What's new in 1.1: up to 2 images per event, optimized automatically on upload; each image placed and sized on its own on the registration page, in the email and on the name tag; "the" before the event name in the email's closing line; clients with their own client administrators, who create and manage their own events and accounts; a raffle with a projector draw screen. Names, job titles, company names and the street address are capitalized automatically on the registration form ("juan dela cruz" becomes "Juan Dela Cruz"); each text field has a setting to turn this on or off. Check-in staff can correct a registrant's details at the desk (Edit details, then reprint the name tag; a changed email can receive the pass again); this can be turned off in the Check-in settings.
 
 One system for many events. Each event gets its own registration page at `yourdomain.com/<event-address>`, with its own branding, form fields, confirmation email, name tag, check-in PIN, records, backups and client logins. Registrants receive a QR pass by email, and staff scan it at the door to check them in and print a name tag.
 

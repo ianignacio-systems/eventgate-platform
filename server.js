@@ -321,11 +321,94 @@ function handleCheckin(req, res) {
   res.json({ status: firstTime ? 'checked_in' : 'already', attendee: badgeLines(ev, fresh), checkedInAt: sqlTimeToIso(fresh.checked_in_at), counts: q.counts.get(ev.id) });
 }
 
+// ---- staff corrections: fix a registrant's details at the desk (name typos, wrong company, and so on)
+const editableFields = (ev) => ev.config.form.fields.filter((f) => f.enabled);
+function staffEditRow(req, res) {
+  const ev = staffEvent(req, res);
+  if (!ev) return null;
+  if (ev.config.checkin.staffEdit === false) { res.status(403).json({ message: 'Editing registrations at the desk is turned off for this event.' }); return null; }
+  const parsed = parseToken(req.body && req.body.code);
+  const row = parsed && q.byCode.get(parsed.code);
+  if (!row || row.event_id !== ev.id) { res.status(404).json({ message: 'This registration was not found.' }); return null; }
+  return { ev, row };
+}
+function handleStaffRecord(req, res) {
+  const found = staffEditRow(req, res);
+  if (!found) return;
+  const { ev, row } = found;
+  const v = rowValues(row);
+  const values = {};
+  for (const f of editableFields(ev)) {
+    if (f.type === 'address_ph') {
+      const parts = v[`${f.key}__parts`] || null;
+      values[f.key] = parts ? { ...parts } : { street: v[f.key] || '' };
+      values[`${f.key}__place`] = parts ? [parts.barangay, parts.city, parts.province, parts.zip].filter(Boolean).join(', ') : '';
+    } else values[f.key] = v[f.key] ?? '';
+  }
+  res.json({
+    fields: editableFields(ev).map((f) => ({ key: f.key, type: f.type, label: f.label, required: f.required, options: f.options, capitalize: EG.capOn(f) })),
+    values, passCode: pretty(row.pass_code), editedAt: sqlTimeToIso(row.edited_at), canEmail: ev.config.email.send !== false,
+  });
+}
+async function handleStaffSave(req, res) {
+  const found = staffEditRow(req, res);
+  if (!found) return;
+  const { ev, row } = found;
+  const c = ev.config;
+  const fields = editableFields(ev);
+  const old = rowValues(row);
+  const input = (req.body && req.body.values) || {};
+  const body = {};
+  for (const f of fields) {
+    if (f.type === 'address_ph') {
+      // Staff correct the street line; the region-to-barangay part stays as the registrant chose it.
+      const parts = old[`${f.key}__parts`];
+      const street = input[f.key] && typeof input[f.key] === 'object' ? input[f.key].street : '';
+      body[f.key] = parts ? { ...parts, street: typeof street === 'string' ? street : parts.street } : undefined;
+    } else body[f.key] = input[f.key];
+  }
+  const { values, errors } = EG.checkSubmission({ form: { fields, consent: { enabled: false } } }, body);
+  for (const f of fields) {
+    // An old registration without address parts keeps its address as it was.
+    if (f.type === 'address_ph' && !old[`${f.key}__parts`]) { delete errors[f.key]; values[f.key] = old[f.key] || ''; }
+  }
+  if (Object.keys(errors).length) return res.status(422).json({ errors });
+  if (values.email && (values.email || '').toLowerCase() !== (row.email || '').toLowerCase()) {
+    const other = q.byEmail.get(ev.id, values.email);
+    if (other && other.id !== row.id) return res.status(409).json({ errors: { email: `${values.email} is already registered by ${other.full_name}.` } });
+  }
+  let extra = {};
+  try { extra = JSON.parse(row.extra || '{}'); } catch {}
+  for (const [k, val] of Object.entries(values)) if (!EG.BUILTIN.includes(k)) extra[k] = val;
+  const pick = (k) => (fields.some((f) => f.key === k) ? (values[k] || null) : row[k]);
+  const first = pick('first_name') || '', last = pick('last_name') || '';
+  try { db.prepare(`UPDATE registrations SET first_name = @first_name, last_name = @last_name, full_name = @full_name, email = @email,
+    designation = @designation, company_name = @company_name, company_address = @company_address, contact_number = @contact_number,
+    extra = @extra, edited_at = datetime('now') WHERE id = @id`).run({
+    id: row.id, first_name: first, last_name: last, full_name: `${first} ${last}`.trim() || row.full_name,
+    email: pick('email'), designation: pick('designation'), company_name: pick('company_name'),
+    company_address: pick('company_address'), contact_number: pick('contact_number'), extra: JSON.stringify(extra),
+  }); } catch (err) {
+    if (err.code === 'SQLITE_CONSTRAINT_UNIQUE') return res.status(409).json({ errors: { email: `${values.email} is already registered.` } });
+    throw err;
+  }
+  const fresh = q.byCode.get(row.pass_code);
+  bus.emit('change', { type: 'edited', eventId: ev.id });
+  let emailSent = false;
+  if (req.body.resend && mailsTo(ev, fresh)) {
+    try { emailSent = await sendPass(ev, fresh); } catch (err) { console.error(`[mail] Resending to ${fresh.email} failed:`, err.message); }
+  }
+  console.log(`[staff] Registration ${pretty(fresh.pass_code)} for event "${ev.slug}" was corrected at the desk.`);
+  res.json({ ok: true, attendee: { ...badgeLines(ev, fresh), email: fresh.email, checkedInAt: sqlTimeToIso(fresh.checked_in_at) }, emailSent });
+}
+
 app.get('/api/e/:slug', handleEvent);
 app.post('/api/e/:slug/register', registerLimiter, handleRegister);
 app.post('/api/e/:slug/staff/verify', staffPinLimiter, handleVerify);
 app.post('/api/e/:slug/checkin', checkinLimiter, staffPinLimiter, handleCheckin);
 app.post('/api/e/:slug/staff/search', checkinLimiter, staffPinLimiter, handleSearch);
+app.post('/api/e/:slug/staff/record', checkinLimiter, staffPinLimiter, handleStaffRecord);
+app.post('/api/e/:slug/staff/record/save', checkinLimiter, staffPinLimiter, handleStaffSave);
 // Addresses used by the first version: they now mean "the event on the home page".
 app.get('/api/event', handleEvent);
 app.post('/api/register', registerLimiter, handleRegister);

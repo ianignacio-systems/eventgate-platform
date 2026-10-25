@@ -23,6 +23,7 @@ const REG_COLUMNS = `
     created_at      TEXT NOT NULL DEFAULT (datetime('now')),
     email_sent_at   TEXT,
     checked_in_at   TEXT,
+    edited_at       TEXT,
     UNIQUE (event_id, email)`;
 
 // Default charts on a new event's dashboard (only for fields the form actually has).
@@ -209,6 +210,9 @@ function openDb(dbPath, env = process.env) {
     })();
     console.log('[upgrade] Email is now optional in the registrations table.');
   }
+
+  // Added in 1.1: when staff last corrected a registration at the check-in desk.
+  if (!cols('registrations').includes('edited_at')) db.exec('ALTER TABLE registrations ADD COLUMN edited_at TEXT');
 
   return { db, dataDir, backupDir, uploadsDir, defaultCharts, slugify };
 }
