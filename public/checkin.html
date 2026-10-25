@@ -67,6 +67,29 @@
   .wrap .powered { margin-top: 2rem; justify-content: center; }
   .foot { margin-top: 2rem; display: flex; justify-content: space-between; align-items: center; gap: 1rem; color: var(--muted); font-size: .88rem; }
 
+
+  /* ---------- correcting a registration ---------- */
+  #editDlg { width: min(560px, calc(100vw - 2rem)); max-height: calc(100vh - 2rem); border: 0; border-radius: 16px; padding: 0; background: var(--surface); color: var(--ink); box-shadow: 0 20px 60px rgba(0,0,0,.35); }
+  #editDlg::backdrop { background: rgba(0,0,0,.45); }
+  #editDlg form { display: flex; flex-direction: column; max-height: calc(100vh - 2rem); }
+  #editDlg .dh { padding: 1.1rem 1.25rem .6rem; border-bottom: 1.5px solid var(--line); }
+  #editDlg .dh h2 { font: 800 1.3rem/1.2 var(--display); margin: 0; }
+  #editDlg .dh p { margin: .2rem 0 0; color: var(--muted); font-size: .9rem; }
+  #editDlg .db { padding: 1rem 1.25rem; overflow-y: auto; display: flex; flex-direction: column; gap: .85rem; }
+  #editDlg .df { padding: .8rem 1.25rem 1.1rem; border-top: 1.5px solid var(--line); display: flex; gap: .6rem; justify-content: flex-end; flex-wrap: wrap; }
+  #editDlg label.lb { display: block; font-weight: 600; font-size: .9rem; margin-bottom: .3rem; }
+  #editDlg .opt { font-weight: 400; color: var(--muted); }
+  #editDlg select, #editDlg textarea { width: 100%; font: inherit; color: var(--ink); background: var(--surface); border: 1.5px solid var(--line); border-radius: 10px; padding: .65rem .8rem; min-height: 48px; }
+  #editDlg textarea { min-height: 80px; resize: vertical; }
+  #editDlg .place { margin: .35rem 0 0; color: var(--muted); font-size: .88rem; }
+  #editDlg .tick { display: flex; gap: .55rem; align-items: flex-start; font-weight: 600; cursor: pointer; }
+  #editDlg .tick input { width: 20px; height: 20px; min-height: 0; margin-top: 2px; accent-color: var(--cobalt); flex: none; }
+  #editDlg .invalid input, #editDlg .invalid select, #editDlg .invalid textarea { border-color: var(--error); }
+  #editDlg .dmsg { color: var(--error); font-size: .9rem; margin: 0; }
+  #editDlg .dmsg:empty { display: none; }
+  .result .acts-row { display: flex; gap: .5rem; flex-wrap: wrap; margin-top: .8rem; }
+  .result .acts-row .btn { min-height: 40px; padding: .4rem 1rem; font-size: .92rem; }
+  .result .edited { margin-top: .35rem; color: var(--muted); font-size: .88rem; }
   /* ---------- name tag settings ---------- */
   .printbar { display: flex; flex-wrap: wrap; align-items: center; gap: .6rem 1rem; background: var(--surface); border: 1.5px solid var(--line); border-radius: 12px; padding: .75rem 1rem; margin-bottom: 1rem; font-size: .93rem; }
   .printbar label { display: inline-flex; align-items: center; gap: .5rem; margin: 0; font-weight: 600; cursor: pointer; }
@@ -79,10 +102,11 @@
   .modebar button[aria-pressed="true"] { background: var(--cobalt); color: var(--on-cobalt); border-color: var(--cobalt); }
   #searchZone input { margin-top: .1rem; }
   .find-list { list-style: none; margin: .75rem 0 0; padding: 0; display: flex; flex-direction: column; gap: .5rem; }
-  .find-list li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .2rem 1rem; align-items: center; background: var(--surface); border: 1.5px solid var(--line); border-radius: 12px; padding: .7rem .9rem; }
+  .find-list li { display: flex; flex-wrap: wrap; gap: .5rem 1rem; align-items: center; background: var(--surface); border: 1.5px solid var(--line); border-radius: 12px; padding: .7rem .9rem; }
+  .find-list li > div:first-child { flex: 1 1 240px; min-width: 0; }
   .find-list b { display: block; font-size: 1.02rem; }
   .find-list .sub { color: var(--muted); font-size: .88rem; overflow-wrap: anywhere; }
-  .find-list .acts { display: flex; gap: .4rem; flex-wrap: wrap; justify-content: flex-end; }
+  .find-list .acts { display: flex; gap: .4rem; flex-wrap: wrap; justify-content: flex-end; align-items: center; margin-left: auto; }
   .find-list .btn { min-height: 40px; padding: .4rem .9rem; font-size: .92rem; }
   .find-list .done { color: var(--ok); font-weight: 600; font-size: .88rem; white-space: nowrap; }
   .find-list .empty { display: block; color: var(--muted); text-align: center; }
@@ -204,6 +228,15 @@
   </footer>
 </main>
 
+<dialog id="editDlg" aria-labelledby="editTitle">
+  <form id="editForm" novalidate>
+    <div class="dh"><h2 id="editTitle">Edit details</h2><p id="editSub"></p></div>
+    <div class="db" id="editBody"></div>
+    <div class="df"><p class="dmsg" id="editMsg" role="alert" style="flex:1 1 100%"></p>
+      <button class="btn btn-quiet" type="button" id="editCancel">Cancel</button>
+      <button class="btn" type="submit" id="editSave">Save changes</button></div>
+  </form>
+</dialog>
 <div id="tag" aria-hidden="true">
   <div class="t-body" id="tBody">
     <div class="t-head" id="tHead"></div>
@@ -325,18 +358,140 @@
     fitTag(a.name.length);
     setTimeout(() => window.print(), 50);
   }
+  const canEdit = () => ck.staffEdit !== false;
   function addReprint(a) {
-    if (!ck.nameTags) return;
+    if (!ck.nameTags && !canEdit()) return;
     const wrap = document.createElement('div');
-    wrap.className = 'reprint';
-    const b = document.createElement('button');
-    b.type = 'button';
-    b.className = 'btn btn-quiet';
-    b.textContent = 'Print name tag';
-    b.addEventListener('click', () => printTag(a));
-    wrap.appendChild(b);
+    wrap.className = 'acts-row';
+    if (ck.nameTags) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'btn btn-quiet';
+      b.textContent = 'Print name tag';
+      b.addEventListener('click', () => printTag(a));
+      wrap.appendChild(b);
+    }
+    if (canEdit()) wrap.appendChild(editButton(a));
     $('result').appendChild(wrap);
   }
+  function editButton(a) {
+    const e = document.createElement('button');
+    e.type = 'button';
+    e.className = 'btn btn-quiet';
+    e.textContent = 'Edit details';
+    e.addEventListener('click', () => openEdit(a.passCode));
+    return e;
+  }
+
+  // ---------- correcting a registration ----------
+  // Staff fix typing mistakes at the desk (a misspelled name, the wrong company), then reprint the tag.
+  let editing = null;
+  const dlg = $('editDlg');
+  async function staffPost(path, payload) {
+    const r = await fetch(`${API}/staff/${path}`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-staff-pin': pin }, body: JSON.stringify(payload) });
+    if (r.status === 401) { dlg.close(); lock(); $('pinErr').textContent = 'The PIN was rejected. Enter it again.'; throw new Error('pin'); }
+    return { r, body: await r.json().catch(() => ({})) };
+  }
+  function editControl(f, v) {
+    const id = `e_${f.key}`;
+    const opt = f.required ? '' : ' <span class="opt">(optional)</span>';
+    const wrap = document.createElement('div');
+    wrap.dataset.key = f.key;
+    const esc = EG.esc;
+    const val = v[f.key];
+    if (f.type === 'checkbox') {
+      wrap.innerHTML = `<label class="tick"><input type="checkbox" id="${id}"${val === 'Yes' ? ' checked' : ''}> <span>${esc(f.label)}</span></label>`;
+    } else if (f.type === 'address_ph') {
+      const street = val && typeof val === 'object' ? val.street || '' : '';
+      const place = v[`${f.key}__place`];
+      wrap.innerHTML = `<label class="lb" for="${id}">${esc(f.label)}: unit, floor, building and street${opt}</label><input id="${id}" type="text" maxlength="200" autocapitalize="${f.capitalize ? 'words' : 'off'}" value="${esc(street)}">${place ? `<p class="place">${esc(place)}</p>` : ''}`;
+    } else if (['select', 'radio', 'yesno'].includes(f.type)) {
+      const opts = f.type === 'yesno' ? ['Yes', 'No'] : (f.options || []);
+      const list = opts.includes(val) || !val ? opts : [val, ...opts];
+      wrap.innerHTML = `<label class="lb" for="${id}">${esc(f.label)}${opt}</label><select id="${id}"><option value="">${f.required ? 'Choose…' : '(no answer)'}</option>${list.map((o) => `<option${o === val ? ' selected' : ''}>${esc(o)}</option>`).join('')}</select>`;
+    } else if (f.type === 'textarea') {
+      wrap.innerHTML = `<label class="lb" for="${id}">${esc(f.label)}${opt}</label><textarea id="${id}" maxlength="500">${esc(val || '')}</textarea>`;
+    } else {
+      const type = f.type === 'email' ? 'email' : f.type === 'date' ? 'date' : 'text';
+      const mode = f.type === 'phone_ph' || f.type === 'phone' ? ' inputmode="tel"' : f.type === 'number' ? ' inputmode="decimal"' : '';
+      wrap.innerHTML = `<label class="lb" for="${id}">${esc(f.label)}${opt}</label><input id="${id}" type="${type}"${mode} maxlength="${f.type === 'email' ? 254 : 150}" autocapitalize="${f.capitalize ? 'words' : 'off'}" value="${esc(val || '')}">`;
+    }
+    wrap.insertAdjacentHTML('beforeend', `<p class="err" id="e_${f.key}-err"></p>`);
+    const input = wrap.querySelector('input:not([type=checkbox]), select, textarea');
+    if (input && f.capitalize && (f.type === 'text' || f.type === 'address_ph')) {
+      input.addEventListener('blur', () => { if (input.value.trim()) input.value = EG.titleCase(input.value.replace(/\s+/g, ' ').trim(), f.type === 'address_ph' ? 'words' : EG.capMode(f)); });
+    }
+    if (f.type === 'email') input.addEventListener('input', syncResend);
+    return wrap;
+  }
+  function syncResend() {
+    const box = $('e_resendRow');
+    if (!box || !editing) return;
+    const now = ($('e_email') || { value: '' }).value.trim().toLowerCase();
+    box.hidden = !now || now === String(editing.values.email || '').toLowerCase();
+  }
+  async function openEdit(code) {
+    try {
+      const { r, body } = await staffPost('record', { code });
+      if (!r.ok) return show('bad', 'Can’t edit', [[body.message || 'Try again.']]);
+      editing = { code, ...body };
+      $('editSub').textContent = `Pass ${body.passCode}. Correct what the registrant typed, then save.`;
+      const fields = body.fields;
+      $('editBody').replaceChildren(...fields.map((f) => editControl(f, body.values)));
+      if (body.canEmail && fields.some((f) => f.key === 'email')) {
+        $('editBody').insertAdjacentHTML('beforeend', `<div id="e_resendRow" hidden><label class="tick"><input type="checkbox" id="e_resend" checked> <span>Send ${ck.qr ? 'the pass' : 'the confirmation'} to the new email address</span></label></div>`);
+      }
+      $('editMsg').textContent = '';
+      $('editSave').disabled = false;
+      dlg.showModal();
+      const first = $('editBody').querySelector('input, select, textarea');
+      if (first) first.focus();
+    } catch (err) { if (err.message !== 'pin') show('bad', 'No connection', [['The check-in server could not be reached. Try again.']]); }
+  }
+  function closeEdit() { dlg.close(); editing = null; setTimeout(refocus, 50); }
+  $('editCancel').addEventListener('click', closeEdit);
+  dlg.addEventListener('cancel', (e) => { e.preventDefault(); closeEdit(); });
+  $('editForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (!editing) return;
+    const values = {};
+    for (const f of editing.fields) {
+      const el = $(`e_${f.key}`);
+      if (!el) continue;
+      if (f.type === 'checkbox') values[f.key] = el.checked;
+      else if (f.type === 'address_ph') values[f.key] = { street: el.value };
+      else values[f.key] = el.value;
+    }
+    const resendRow = $('e_resendRow');
+    const resend = Boolean(resendRow && !resendRow.hidden && $('e_resend').checked);
+    $('editBody').querySelectorAll('[data-key]').forEach((w) => { w.classList.remove('invalid'); const er = w.querySelector('.err'); if (er) er.textContent = ''; });
+    $('editMsg').textContent = '';
+    $('editSave').disabled = true;
+    try {
+      const { r, body } = await staffPost('record/save', { code: editing.code, values, resend });
+      if (r.ok) {
+        const a = body.attendee;
+        closeEdit();
+        const note = resend ? (body.emailSent ? `${ck.qr ? 'The pass was' : 'The confirmation was'} sent to ${a.email}.` : `The email to ${a.email} could not be sent.`) : '';
+        show('ok', 'Details updated', [[a.name], [[a.line2, a.line3].filter(Boolean).join(', ')], note ? [note, 'sub'] : null]);
+        addReprint(a);
+        if (mode === 'search') runSearch();
+        return;
+      }
+      const errors = body.errors || {};
+      let firstBad = null;
+      for (const [k, msg] of Object.entries(errors)) {
+        const w = $('editBody').querySelector(`[data-key="${k}"]`);
+        if (!w) continue;
+        w.classList.add('invalid');
+        w.querySelector('.err').textContent = msg;
+        firstBad = firstBad || w.querySelector('input, select, textarea');
+      }
+      $('editMsg').textContent = Object.keys(errors).length ? 'Check the highlighted details.' : (body.message || 'The changes could not be saved.');
+      if (firstBad) firstBad.focus();
+    } catch (err) { if (err.message !== 'pin') $('editMsg').textContent = 'The check-in server could not be reached. Try again.'; }
+    finally { $('editSave').disabled = false; }
+  });
   $('testPrint').addEventListener('click', () => printTag({ name: 'Juan dela Cruz', line2: 'Operations Manager', line3: 'Sample Company Inc.' }));
 
   function setCounts(c) {
@@ -506,6 +661,7 @@
           b.addEventListener('click', () => { b.disabled = true; checkIn(a.passCode); });
           acts.append(b);
         }
+        if (canEdit()) acts.append(editButton(a));
         li.append(who, acts);
         return li;
       }));
@@ -516,7 +672,7 @@
   $('modeCamera').addEventListener('click', () => setMode('camera'));
 
   function refocus() {
-    if (mode !== 'scanner' || $('station').hidden) return;
+    if (mode !== 'scanner' || $('station').hidden || $('editDlg').open) return;
     const a = document.activeElement;
     // Don't steal focus while staff are typing a code or changing a setting.
     if (a && a !== scanInput && a !== document.body && a.matches('input, select, textarea')) return;

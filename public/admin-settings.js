@@ -370,6 +370,7 @@
         ${opt('enabled', 'Check attendees in at the venue', 'Staff record arrivals on the check-in page. Turn this off for events that only need a list of registrations.', false)}
         ${opt('qr', 'Send each registrant a QR pass', 'The QR code is scanned at the desk. Without it, staff look attendees up by name, and the email is a simple confirmation.', !c.enabled)}
         ${opt('nameTags', 'Print a name tag at check-in', 'Prints on a label printer as each attendee checks in. Set up the tag in the Name tag section.', !c.enabled)}
+        ${opt('staffEdit', 'Let check-in staff correct registration details', 'Staff can fix a misspelled name, the wrong company or other answers at the desk, then reprint the name tag. Changes are saved straight away.', !c.enabled)}
         <p class="notice info" style="margin:4px 0 0">${esc(summary)}</p>
       </section>
       ${c.enabled ? `<section class="card stack">
@@ -593,6 +594,7 @@
           ${fixedWidth ? '' : `<div class="field"><label>Width</label><select data-f="width"><option value="half"${f.width !== 'full' ? ' selected' : ''}>Half width</option><option value="full"${f.width === 'full' ? ' selected' : ''}>Full width</option></select></div>`}
           <div class="field">${fixedWidth ? '' : '<span class="lbl">&nbsp;</span>'}<label class="check"><input type="checkbox" data-f="required"${f.required ? ' checked' : ''}${lockRequired || !f.enabled ? ' disabled' : ''}> <span>${f.type === 'checkbox' ? 'Must be ticked to register' : f.type === 'yesno' ? 'Required (must answer Yes or No)' : 'Required'}</span></label></div>
         </div>
+        ${['text', 'address_ph'].includes(f.type) ? `<label class="check"><input type="checkbox" data-f="capitalize"${EG.capOn(f) ? ' checked' : ''}> <span>Capitalize the first letter of each word${f.type === 'address_ph' ? ' (unit, building and street)' : ''}</span></label><p class="help" style="margin:0;color:var(--muted);font-size:.82rem">${['first_name', 'last_name'].includes(f.key) ? 'For example, “juan dela cruz” or “JUAN DELA CRUZ” is saved as “Juan Dela Cruz”. Names typed with their own capitals, like “Juan dela Cruz”, are kept as typed.' : 'For example, “operations manager” is saved as “Operations Manager”. Short words like “of” and “and” stay small, and abbreviations like IT, HR and CEO stay in capitals.'}</p>` : ''}
         ${f.type === 'checkbox' ? '<p class="help" style="margin:0;color:var(--muted);font-size:.82rem">One box the registrant ticks to confirm or agree, recorded as Yes (ticked) or No. If it must be ticked, nobody can answer No, so for a real choice use the <b>Yes / No question</b> type instead.</p>' : ''}
         ${f.type === 'yesno' ? '<p class="help" style="margin:0;color:var(--muted);font-size:.82rem">Registrants choose Yes or No. If it isn’t required, they can leave it unanswered.</p>' : ''}
         ${f.key === 'email' ? `<p class="help" style="margin:0;color:var(--muted);font-size:.82rem">${rules.requiredLocked ? 'Required while the event sends QR passes, because the pass is emailed to this address. To make it optional, turn off QR passes in the Check-in section.'
@@ -624,7 +626,7 @@
         const c = draft.config.checkin;
         const before = EG.emailMode(draft.config);
         c[el.dataset.ck] = el.checked;
-        if (el.dataset.ck === 'enabled') { c.qr = el.checked; c.nameTags = el.checked; }
+        if (el.dataset.ck === 'enabled') { c.qr = el.checked; c.nameTags = el.checked; c.staffEdit = el.checked; }
         // Standard email wording and button text follow the change; wording you wrote yourself is kept.
         const after = EG.emailMode(draft.config);
         if (before !== after) {
@@ -730,7 +732,7 @@
         const f = el && fieldAt(el);
         if (!f) return;
         const k = el.dataset.f;
-        if (k === 'enabled' || k === 'required') f[k] = el.checked;
+        if (k === 'enabled' || k === 'required' || k === 'capitalize') f[k] = el.checked;
         else if (k === 'options') f.options = el.value.split('\n').map((s) => s.trim()).filter(Boolean);
         else f[k] = el.value;
         if (k === 'type' && ['select', 'radio'].includes(f.type) && !(f.options && f.options.length)) f.options = ['Option 1', 'Option 2'];

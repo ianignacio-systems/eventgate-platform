@@ -322,7 +322,7 @@
       case 'address_ph':
         return `<fieldset class="field full addr" data-addr="${f.key}"><legend>${esc(f.label)}${opt}</legend>
           <div class="addr-grid">
-            <div class="sub wide"><label for="${id}_street">Unit, floor, building and street</label><input id="${id}_street" data-part="street" type="text" maxlength="200" autocomplete="street-address" placeholder="${esc(f.placeholder || 'e.g. Unit 5B, 3F Clark Center, Jose Abad Santos Ave.')}"></div>
+            <div class="sub wide"><label for="${id}_street">Unit, floor, building and street</label><input id="${id}_street" data-part="street" type="text" maxlength="200" autocomplete="street-address"${EG.capOn(f) ? ' autocapitalize="words"' : ''} placeholder="${esc(f.placeholder || 'e.g. Unit 5B, 3F Clark Center, Jose Abad Santos Ave.')}"></div>
             <div class="sub"><label for="${id}_region">Region</label><select id="${id}_region" data-part="region"><option value="">Loading…</option></select></div>
             <div class="sub"><label for="${id}_province">Province</label><select id="${id}_province" data-part="province" disabled><option value="">Choose a region first</option></select></div>
             <div class="sub"><label for="${id}_city">City / Municipality</label><select id="${id}_city" data-part="city" disabled><option value="">Choose a province first</option></select></div>
@@ -335,7 +335,7 @@
           <div class="choices yesno" id="${id}">${['Yes', 'No'].map((o, i) => `<label class="choice"><input type="radio" name="${f.key}" value="${o}"${i === 0 ? desc : ''}> <span>${o}</span></label>`).join('')}</div>${help}<p class="err" id="${f.key}-err"></p></fieldset>`;
       case 'checkbox':
         return `<div class="field full"><label class="tick"><input type="checkbox" id="${id}" name="${f.key}"${desc}> <span>${esc(f.label)}</span></label>${help}<p class="err" id="${f.key}-err"></p></div>`;
-      default: control = `<input id="${id}" name="${f.key}" type="text" maxlength="150" autocomplete="${auto}"${ph}${desc} ${req}>`;
+      default: control = `<input id="${id}" name="${f.key}" type="text" maxlength="150" autocomplete="${auto}"${EG.capOn(f) ? ' autocapitalize="words"' : ''}${ph}${desc} ${req}>`;
     }
     return `<div class="field${wide}"><label for="${id}">${esc(f.label)}${opt}</label>${control}${help}<p class="err" id="${f.key}-err"></p></div>`;
   }
@@ -524,6 +524,13 @@
   // Email and phone numbers are checked as soon as the registrant leaves the box, so slips like a comma
   // instead of a period are caught straight away.
   form.addEventListener('focusout', (e) => {
+    // Names, job titles, companies and the street are tidied to capital first letters as the box is left.
+    const capField = e.target.name ? fields.find((x) => x.key === e.target.name && x.type === 'text')
+      : e.target.dataset && e.target.dataset.part === 'street' ? fields.find((x) => x.key === fieldKeyOf(e.target)) : null;
+    if (capField && EG.capOn(capField) && e.target.value.trim()) {
+      const fixed = EG.titleCase(e.target.value.replace(/\s+/g, ' ').trim(), e.target.dataset.part === 'street' ? 'words' : EG.capMode(capField));
+      if (fixed !== e.target.value) { e.target.value = fixed; syncBadge(); }
+    }
     const k = e.target.name;
     const f = k && fields.find((x) => x.key === k);
     if (!f || !['email', 'phone_ph', 'phone'].includes(f.type) || !e.target.value.trim()) return;
