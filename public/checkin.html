@@ -127,41 +127,46 @@
   #tag {
     position: fixed; left: -10000px; top: 0; visibility: hidden;
     display: flex; flex-direction: column; justify-content: center; align-items: center; text-align: center;
-    width: var(--tag-w); height: var(--tag-h); box-sizing: border-box;
+    width: var(--tag-w); height: var(--tag-u); box-sizing: border-box;
     /* margins in label units (a % here would follow the screen width while the tag is measured off-screen) */
     padding: calc(var(--tag-w) * .06) calc(var(--tag-w) * .07) calc(var(--tag-w) * .11); overflow: hidden;
     color: #000; background: #fff; font-family: var(--display); --fit: 1;
   }
   #tag .t-body { width: 100%; display: flex; flex-direction: column; align-items: center; }
-  #tag .t-ev { font: 700 calc(var(--tag-h) * .05 * var(--fit))/1.2 var(--body); text-transform: uppercase; letter-spacing: .06em; padding-bottom: .45em; margin-bottom: .7em; border-bottom: 1.5px solid #000; max-width: 100%; }
+  #tag .t-ev { font: 700 calc(var(--tag-u) * .05 * var(--fit))/1.2 var(--body); text-transform: uppercase; letter-spacing: .06em; padding-bottom: .45em; margin-bottom: .7em; border-bottom: 1.5px solid #000; max-width: 100%; }
   #tag .t-nm { font-weight: 800; line-height: 1.02; letter-spacing: -0.01em; overflow-wrap: anywhere; max-width: 100%; }
-  #tag .t-ds { font: 600 calc(var(--tag-h) * .085 * var(--fit))/1.2 var(--body); margin-top: .55em; overflow-wrap: anywhere; max-width: 100%; }
-  #tag .t-co { font: 400 calc(var(--tag-h) * .08 * var(--fit))/1.2 var(--body); margin-top: .15em; overflow-wrap: anywhere; max-width: 100%; }
+  #tag .t-ds { font: 600 calc(var(--tag-u) * .085 * var(--fit))/1.2 var(--body); margin-top: .55em; overflow-wrap: anywhere; max-width: 100%; }
+  #tag .t-co { font: 400 calc(var(--tag-u) * .08 * var(--fit))/1.2 var(--body); margin-top: .15em; overflow-wrap: anywhere; max-width: 100%; }
   /* Images on the tag, each in its own spot: a row above the event name (left, centre, right spots),
      beside the event name, and/or a row at the bottom. Sizes come from the event's Name tag settings. */
   #tag .t-head { width: 100%; display: flex; flex-direction: column; align-items: center; }
   #tag .t-row { width: 100%; display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; gap: calc(var(--tag-w) * .02); }
-  #tag .t-above { margin: 0 0 calc(var(--tag-h) * .03); }
-  #tag .t-bottom { margin: calc(var(--tag-h) * .04) 0 0; }
+  #tag .t-above { margin: 0 0 calc(var(--tag-u) * .03); }
+  #tag .t-bottom { margin: calc(var(--tag-u) * .04) 0 0; }
   #tag .t-z { display: flex; align-items: center; gap: calc(var(--tag-w) * .03); min-width: 0; }
   #tag .t-z-left { justify-content: flex-start; }
   #tag .t-z-center { justify-content: center; }
   #tag .t-z-right { justify-content: flex-end; }
   #tag .t-headrow { width: 100%; display: flex; align-items: center; justify-content: center; gap: calc(var(--tag-w) * .03); margin-bottom: .7em; }
   #tag .t-headrow .t-ev { margin-bottom: 0; }
-  #tag .t-side { flex: 0 1 auto; max-width: 30%; display: flex; flex-direction: column; align-items: center; gap: calc(var(--tag-h) * .02); }
-  #tag .t-head img, #tag .t-bottom img { display: block; height: calc(var(--tag-h) * var(--h, .14) * var(--fit)); width: auto; max-width: var(--mw, 60%); min-width: 0; object-fit: contain; }
+  #tag .t-side { flex: 0 1 auto; max-width: 30%; display: flex; flex-direction: column; align-items: center; gap: calc(var(--tag-u) * .02); }
+  #tag .t-head img, #tag .t-bottom img { display: block; height: calc(var(--tag-u) * var(--h, .14) * var(--fit)); width: auto; max-width: var(--mw, 60%); min-width: 0; object-fit: contain; }
   #tag .t-side img { max-width: 100%; }
-  #tag .t-pw { position: absolute; left: 0; right: 0; bottom: 3.5%; display: flex; align-items: center; justify-content: center; gap: .45em; font: 400 calc(var(--tag-h) * .034)/1 var(--body); color: #555; }
-  #tag .t-pw img { height: calc(var(--tag-h) * .062); width: auto; display: block; }
+  #tag .t-pw { position: absolute; left: 0; right: 0; bottom: 3.5%; display: flex; align-items: center; justify-content: center; gap: .45em; font: 400 calc(var(--tag-u) * .034)/1 var(--body); color: #555; }
+  #tag .t-pw img { height: calc(var(--tag-u) * .062); width: auto; display: block; }
   @media print {
     html, body { background: #fff !important; margin: 0 !important; padding: 0 !important; }
     :root { padding: 0 !important; }
     main.wrap { display: none !important; }
     #tag { position: relative; left: 0; visibility: visible; page-break-inside: avoid; break-inside: avoid; }
+    /* Some label printers feed the label sideways: the page is then the label turned 90 degrees, and the
+       tag is turned to match, so it comes out the right way up on the label. */
+    html.rotate, html.rotate body { width: var(--tag-h); height: var(--tag-w); overflow: hidden; }
+    html.rotate #tag { position: absolute; top: 0; left: 0; transform-origin: top left; transform: translateX(var(--tag-h)) rotate(90deg); }
+    html:not(.rotate), html:not(.rotate) body { width: var(--tag-w); height: var(--tag-h); overflow: hidden; }
   }
 </style>
-<style id="pageSize">@page { size: 4in 3in; margin: 0; } :root { --tag-w: 4in; --tag-h: 3in; }</style>
+<style id="pageSize">@page { size: 4in 3in; margin: 0; } :root { --tag-w: 4in; --tag-h: 3in; --tag-u: 3in; }</style>
 </head>
 <body>
 <main class="wrap">
@@ -187,8 +192,13 @@
         <option value="4in 2in">4 × 2 in label</option>
         <option value="3.5in 2.25in">3.5 × 2.25 in label</option>
         <option value="90mm 55mm">90 × 55 mm card</option>
-        <option value="A6 landscape">A6 sheet</option>
+        <option value="148mm 105mm">A6 sheet</option>
       </select>
+      <select id="tagOrient" aria-label="Name tag orientation">
+        <option value="landscape">Landscape (wide)</option>
+        <option value="portrait">Portrait (tall)</option>
+      </select>
+      <label title="Turn this on if the tag comes out sideways or cut off"><input type="checkbox" id="tagRotate"> Rotate 90° for printer</label>
       <button class="btn btn-quiet" id="testPrint" type="button">Test print</button>
     </div>
     <div class="modebar" id="modebar" role="group" aria-label="How to check people in">
@@ -271,17 +281,29 @@
     get(k) { try { return localStorage.getItem(k); } catch { return null; } },
     set(k, v) { try { localStorage.setItem(k, v); } catch {} },
   };
-  const SIZES = { 'A6 landscape': ['148mm', '105mm'] };
-  function applySize(value) {
-    const [w, h] = SIZES[value] || value.split(' ');
-    $('pageSize').textContent = `@page { size: ${value}; margin: 0; } :root { --tag-w: ${w}; --tag-h: ${h}; }`;
+  // Each size is written wide (width first). Portrait swaps the sides; "Rotate 90° for printer" makes the
+  // page the label turned sideways, for printers that feed labels that way. The browser's own Portrait /
+  // Landscape choice has no effect here, because the page sets its exact size.
+  const OLD_SIZES = { 'A6 landscape': '148mm 105mm' };
+  function applySize() {
+    const [a, b] = $('tagSize').value.split(' ');
+    const portrait = $('tagOrient').value === 'portrait';
+    const rotate = $('tagRotate').checked;
+    const [w, h] = portrait ? [b, a] : [a, b];
+    const [pw, ph] = rotate ? [h, w] : [w, h];
+    document.documentElement.classList.toggle('rotate', rotate);
+    $('pageSize').textContent = `@page { size: ${pw} ${ph}; margin: 0; } :root { --tag-w: ${w}; --tag-h: ${h}; --tag-u: ${portrait ? w : h}; }`;
   }
   $('autoPrint').checked = store.get('autoPrint') === '1';
-  const savedSize = store.get('tagSize');
+  const savedSize = OLD_SIZES[store.get('tagSize')] || store.get('tagSize');
   if (savedSize && [...$('tagSize').options].some((o) => o.value === savedSize)) $('tagSize').value = savedSize;
-  applySize($('tagSize').value);
+  if (store.get('tagOrient') === 'portrait') $('tagOrient').value = 'portrait';
+  $('tagRotate').checked = store.get('tagRotate') === '1';
+  applySize();
   $('autoPrint').addEventListener('change', (e) => store.set('autoPrint', e.target.checked ? '1' : '0'));
-  $('tagSize').addEventListener('change', (e) => { store.set('tagSize', e.target.value); applySize(e.target.value); });
+  $('tagSize').addEventListener('change', (e) => { store.set('tagSize', e.target.value); applySize(); });
+  $('tagOrient').addEventListener('change', (e) => { store.set('tagOrient', e.target.value); applySize(); });
+  $('tagRotate').addEventListener('change', (e) => { store.set('tagRotate', e.target.checked ? '1' : '0'); applySize(); });
 
   // What this event uses at the desk (set in the event's settings).
   let ck = { enabled: true, qr: true, nameTags: true };
@@ -338,7 +360,7 @@
     let scale = start;
     let fit = 1;
     // the other lines never get bigger than 80% of the name
-    const apply = () => { fit = Math.min(fit, (scale * 0.8) / .085); $('tNm').style.fontSize = `calc(var(--tag-h) * ${scale})`; tag.style.setProperty('--fit', fit); };
+    const apply = () => { fit = Math.min(fit, (scale * 0.8) / .085); $('tNm').style.fontSize = `calc(var(--tag-u) * ${scale})`; tag.style.setProperty('--fit', fit); };
     const cs = getComputedStyle(tag);
     const room = () => tag.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom);
     const fits = () => body.scrollHeight <= room() + 1 && body.scrollWidth <= body.clientWidth + 1;
