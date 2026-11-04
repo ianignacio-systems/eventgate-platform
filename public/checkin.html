@@ -163,6 +163,7 @@
        tag is turned to match, so it comes out the right way up on the label. */
     html.rotate, html.rotate body { width: var(--tag-h); height: var(--tag-w); overflow: hidden; }
     html.rotate #tag { position: absolute; top: 0; left: 0; transform-origin: top left; transform: translateX(var(--tag-h)) rotate(90deg); }
+    html.rotate.left #tag { transform: translateY(var(--tag-w)) rotate(-90deg); }
     html:not(.rotate), html:not(.rotate) body { width: var(--tag-w); height: var(--tag-h); overflow: hidden; }
   }
 </style>
@@ -189,6 +190,7 @@
       <label><input type="checkbox" id="autoPrint"> Print name tag on check-in</label>
       <select id="tagSize" aria-label="Name tag size">
         <option value="4in 3in">4 × 3 in badge</option>
+        <option value="6in 4in">4 × 6 in label (shipping-label printers)</option>
         <option value="4in 2in">4 × 2 in label</option>
         <option value="3.5in 2.25in">3.5 × 2.25 in label</option>
         <option value="90mm 55mm">90 × 55 mm card</option>
@@ -198,7 +200,11 @@
         <option value="landscape">Landscape (wide)</option>
         <option value="portrait">Portrait (tall)</option>
       </select>
-      <label title="Turn this on if the tag comes out sideways or cut off"><input type="checkbox" id="tagRotate"> Rotate 90° for printer</label>
+      <select id="tagRotate" aria-label="Rotate for the printer" title="Change this if the tag comes out sideways, cut off or upside down">
+        <option value="0">No rotation</option>
+        <option value="90">Rotate 90° right</option>
+        <option value="270">Rotate 90° left</option>
+      </select>
       <button class="btn btn-quiet" id="testPrint" type="button">Test print</button>
     </div>
     <div class="modebar" id="modebar" role="group" aria-label="How to check people in">
@@ -281,14 +287,16 @@
     get(k) { try { return localStorage.getItem(k); } catch { return null; } },
     set(k, v) { try { localStorage.setItem(k, v); } catch {} },
   };
-  // Each size is written wide (width first). Portrait swaps the sides; "Rotate 90° for printer" makes the
+  // Each size is written wide (width first). Portrait swaps the sides; the rotation makes the
   // page the label turned sideways, for printers that feed labels that way. The browser's own Portrait /
   // Landscape choice has no effect here, because the page sets its exact size.
   const OLD_SIZES = { 'A6 landscape': '148mm 105mm' };
   function applySize() {
     const [a, b] = $('tagSize').value.split(' ');
     const portrait = $('tagOrient').value === 'portrait';
-    const rotate = $('tagRotate').checked;
+    const turn = $('tagRotate').value;
+    const rotate = turn !== '0';
+    document.documentElement.classList.toggle('left', turn === '270');
     const [w, h] = portrait ? [b, a] : [a, b];
     const [pw, ph] = rotate ? [h, w] : [w, h];
     document.documentElement.classList.toggle('rotate', rotate);
@@ -298,12 +306,13 @@
   const savedSize = OLD_SIZES[store.get('tagSize')] || store.get('tagSize');
   if (savedSize && [...$('tagSize').options].some((o) => o.value === savedSize)) $('tagSize').value = savedSize;
   if (store.get('tagOrient') === 'portrait') $('tagOrient').value = 'portrait';
-  $('tagRotate').checked = store.get('tagRotate') === '1';
+  const savedTurn = store.get('tagRotate') === '1' ? '90' : store.get('tagRotate');
+  if (['0', '90', '270'].includes(savedTurn)) $('tagRotate').value = savedTurn;
   applySize();
   $('autoPrint').addEventListener('change', (e) => store.set('autoPrint', e.target.checked ? '1' : '0'));
   $('tagSize').addEventListener('change', (e) => { store.set('tagSize', e.target.value); applySize(); });
   $('tagOrient').addEventListener('change', (e) => { store.set('tagOrient', e.target.value); applySize(); });
-  $('tagRotate').addEventListener('change', (e) => { store.set('tagRotate', e.target.checked ? '1' : '0'); applySize(); });
+  $('tagRotate').addEventListener('change', (e) => { store.set('tagRotate', e.target.value); applySize(); });
 
   // What this event uses at the desk (set in the event's settings).
   let ck = { enabled: true, qr: true, nameTags: true };
