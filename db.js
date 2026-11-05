@@ -116,6 +116,8 @@ function openDb(dbPath, env = process.env) {
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   )`);
   if (!cols('users').includes('role')) db.exec("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'viewer'");
+  // Added in 1.1: optional features the platform administrator switches on per client.
+  if (!cols('clients').includes('guest_list')) db.exec('ALTER TABLE clients ADD COLUMN guest_list INTEGER NOT NULL DEFAULT 0');
   if (!cols('users').includes('client_id')) db.exec('ALTER TABLE users ADD COLUMN client_id INTEGER');
   if (!cols('events').includes('client_id')) db.exec('ALTER TABLE events ADD COLUMN client_id INTEGER');
   // Added later: raffle prizes (in draw order) and every draw made, kept as the raffle's record.

@@ -190,7 +190,7 @@ function publicEvent(ev) {
     },
     badge: c.badge,
     checkin: c.checkin,
-    guestList: { enabled: Boolean(c.guestList && c.guestList.enabled), tickets: Boolean(c.guestList && c.guestList.enabled && c.guestList.ticketRule !== 'none' && c.raffle.enabled) },
+    guestList: { enabled: guestListOn(ev), tickets: guestListOn(ev) && c.guestList.ticketRule !== 'none' && c.raffle.enabled },
   };
 }
 const isPublic = (ev) => ev && (ev.status === 'open' || ev.status === 'closed' || ev.status === 'archived');
@@ -453,7 +453,7 @@ const clientQ = {
   byId: db.prepare('SELECT * FROM clients WHERE id = ?'),
   byName: db.prepare('SELECT * FROM clients WHERE name = ?'),
   insert: db.prepare('INSERT INTO clients (name, contact, max_events) VALUES (?, ?, ?)'),
-  update: db.prepare('UPDATE clients SET name = @name, contact = @contact, active = @active, max_events = @max_events WHERE id = @id'),
+  update: db.prepare('UPDATE clients SET name = @name, contact = @contact, active = @active, max_events = @max_events, guest_list = @guest_list WHERE id = @id'),
   remove: db.prepare('DELETE FROM clients WHERE id = ?'),
   eventIds: db.prepare('SELECT id FROM events WHERE client_id = ?'),
   activeEvents: db.prepare("SELECT COUNT(*) AS n FROM events WHERE client_id = ? AND status != 'archived'"),
@@ -742,6 +742,7 @@ function clientOut(c) {
   const users = clientQ.users.get(c.id);
   return {
     id: c.id, name: c.name, contact: c.contact, active: Boolean(c.active), maxEvents: c.max_events || null,
+    guestList: Boolean(c.guest_list),
     activeEvents: clientQ.activeEvents.get(c.id).n, events: clientQ.allEvents.get(c.id).n,
     users: users.n || 0, managers: users.managers || 0, createdAt: sqlTimeToIso(c.created_at),
   };
@@ -765,7 +766,7 @@ app.patch('/api/admin/clients/:cid', requireOwner, (req, res) => {
   const c = clientQ.byId.get(Number(req.params.cid));
   if (!c) return res.status(404).json({ message: 'That client was not found.' });
   const b = req.body || {};
-  const next = { id: c.id, name: c.name, contact: c.contact, active: c.active, max_events: c.max_events };
+  const next = { id: c.id, name: c.name, contact: c.contact, active: c.active, max_events: c.max_events, guest_list: c.guest_list };
   if (b.name !== undefined) {
     const name = String(b.name).replace(/\s+/g, ' ').trim();
     if (name.length < 2 || name.length > 100) return res.status(422).json({ message: 'Enter a client name of 2 to 100 characters.' });
@@ -780,6 +781,7 @@ app.patch('/api/admin/clients/:cid', requireOwner, (req, res) => {
     next.max_events = max;
   }
   if (b.active !== undefined) next.active = b.active ? 1 : 0;
+  if (b.guestList !== undefined) next.guest_list = b.guestList ? 1 : 0;
   clientQ.update.run(next);
   bus.emit('change', { type: 'sessions' }); // turning a client off signs its accounts out
   res.json(clientOut(clientQ.byId.get(c.id)));
@@ -813,6 +815,7 @@ function eventSummary(ev, auth, clients) {
     venue: ev.config.details.venue, logo: ev.config.branding.logo, primary: ev.config.branding.primary,
     registered: c.total, checkedIn: c.checkedIn, capacity: ev.config.details.capacity,
     isHome: getSetting('home_event') === ev.slug, createdAt: sqlTimeToIso(ev.createdAt), checkin: ev.config.checkin.enabled,
+    guestListAllowed: guestListAllowed(ev),
   };
 }
 
@@ -1302,7 +1305,11 @@ const guestQ = {
   releaseAll: db.prepare('UPDATE guests SET registration_id = NULL WHERE event_id = ?'),
   count: db.prepare('SELECT COUNT(*) AS total, COUNT(registration_id) AS registered FROM guests WHERE event_id = ?'),
 };
-const guestListOn = (ev) => Boolean(ev.config.guestList && ev.config.guestList.enabled);
+// The guest list is an add-on: always available for the platform administrator's own events (no client),
+// and for a client's events only when the platform administrator switched it on for that client.
+const guestListAllowed = (ev) => !ev.clientId || Boolean((clientQ.byId.get(ev.clientId) || {}).guest_list);
+const guestListOn = (ev) => Boolean(ev.config.guestList && ev.config.guestList.enabled) && guestListAllowed(ev);
+const guestFeature = (req, res, next) => (guestListAllowed(req.ev) ? next() : res.status(403).json({ message: 'The guest list isn’t available for this client. The platform administrator can switch it on.' }));
 const fmtYears = (t) => (t == null ? '' : String(Math.round(t * 10) / 10));
 const guestTickets = (ev, g) => EG.ticketsFor(ev.config.guestList.ticketRule, g.tenure, g.tickets);
 
@@ -1412,8 +1419,8 @@ function guestListOut(ev) {
 }
 const saveConfig = (ev, config) => { evQ.update.run({ id: ev.id, slug: ev.slug, status: ev.status, staff_pin: ev.staffPin, config: JSON.stringify(config) }); return eventById(ev.id); };
 
-app.get('/api/admin/events/:id/guests', ...evOwner$, (req, res) => res.json(guestListOut(req.ev)));
-app.put('/api/admin/events/:id/guests/settings', ...evOwner$, (req, res) => {
+app.get('/api/admin/events/:id/guests', ...evOwner$, guestFeature, (req, res) => res.json(guestListOut(req.ev)));
+app.put('/api/admin/events/:id/guests/settings', ...evOwner$, guestFeature, (req, res) => {
   const ev = req.ev, b = req.body || {};
   const gl = { ...ev.config.guestList };
   if (b.enabled !== undefined) gl.enabled = Boolean(b.enabled);
@@ -1427,7 +1434,7 @@ app.put('/api/admin/events/:id/guests/settings', ...evOwner$, (req, res) => {
   raffleChanged(fresh);
   res.json(guestListOut(fresh));
 });
-app.post('/api/admin/events/:id/guests/upload', ...evOwner$, express.raw({ type: () => true, limit: '5mb' }), async (req, res) => {
+app.post('/api/admin/events/:id/guests/upload', ...evOwner$, guestFeature, express.raw({ type: () => true, limit: '5mb' }), async (req, res) => {
   const ev = req.ev;
   if (!Buffer.isBuffer(req.body) || !req.body.length) return res.status(422).json({ message: 'Choose an Excel (.xlsx) or CSV file.' });
   let parsed;
@@ -1454,7 +1461,7 @@ app.post('/api/admin/events/:id/guests/upload', ...evOwner$, express.raw({ type:
   res.json({ ...guestListOut(eventById(ev.id)), upload: { people: parsed.people.length, problems: parsed.problems, columns: parsed.columns } });
 });
 // Undo a registration made under someone's name (for example by a colleague by mistake): frees the name.
-app.delete('/api/admin/events/:id/guests/:gid/registration', ...evOwner$, (req, res) => {
+app.delete('/api/admin/events/:id/guests/:gid/registration', ...evOwner$, guestFeature, (req, res) => {
   const ev = req.ev;
   const g = guestQ.byId.get(Number(req.params.gid), ev.id);
   if (!g || !g.registration_id) return res.status(404).json({ message: 'That person is not registered.' });
@@ -1470,7 +1477,7 @@ app.delete('/api/admin/events/:id/guests/:gid/registration', ...evOwner$, (req, 
   bus.emit('change', { type: 'registered', eventId: ev.id });
   res.json(guestListOut(ev));
 });
-app.get('/api/admin/events/:id/guests.xlsx', ...evOwner$, async (req, res) => {
+app.get('/api/admin/events/:id/guests.xlsx', ...evOwner$, guestFeature, async (req, res) => {
   const ev = req.ev, out = guestListOut(ev);
   const only = req.query.only === 'missing' ? out.list.filter((g) => !g.registered) : out.list;
   const wb = new ExcelJS.Workbook();
@@ -1702,7 +1709,7 @@ async function buildWorkbook(ev, rows) {
     ws.headerFooter.oddFooter = `&L${c.details.name.replace(/&/g, '&&')}&RPage &P of &N`;
   }
 
-  const glOn = c.guestList && c.guestList.enabled;
+  const glOn = guestListOn(ev);
   const xOf = (r) => { try { return JSON.parse(r.extra || '{}'); } catch { return {}; } };
   addSheet('Registered', 'Registration Report', rows, [
     ...(glOn ? [{ label: 'Tenure (years)', width: 10, get: (r) => (xOf(r).tenure ? Number(xOf(r).tenure) : '') }, ...(c.guestList.ticketRule !== 'none' ? [{ label: 'Raffle tickets', width: 9, get: (r) => (xOf(r).raffle_tickets ? Number(xOf(r).raffle_tickets) : '') }] : [])] : []),
