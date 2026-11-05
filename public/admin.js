@@ -648,6 +648,7 @@
     $('tData').hidden = tab !== 'data';
     $('tSettings').hidden = tab !== 'settings';
     if (tab === 'raffle') window.RaffleAdmin.open(cur); else window.RaffleAdmin.close();
+    if (tab === 'guests') window.GuestsAdmin.open(cur); else window.GuestsAdmin.close();
     $('live').hidden = tab !== 'dash';
     if (tab === 'settings') window.Settings.open(cur, { onSaved: async (fresh) => { cur = { ...cur, ...fresh }; renderEventHead(); if (window.Analysis) window.Analysis.setEvent(cur); } });
     else window.Settings.close();
@@ -672,6 +673,7 @@
       }
       if (d.type !== 'sessions' && tab === 'data' && (d.type === 'reset')) loadBackups();
       if (tab === 'raffle' && ['raffle', 'checkin', 'checked_in', 'registered', 'reset'].includes(d.type)) window.RaffleAdmin.reload();
+      if (tab === 'guests' && ['registered', 'reset', 'guests', 'edited'].includes(d.type)) window.GuestsAdmin.reload();
       scheduleRefresh();
     });
     stream.addEventListener('error', () => setLive(false));

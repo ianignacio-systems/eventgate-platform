@@ -102,6 +102,19 @@
   .field .phone input { border: 0 !important; border-radius: 0 !important; min-width: 0; }
   .field .phone input:focus-visible { outline: none; }
 
+  /* Guest list: people find and pick their own name */
+  .gpick { position: relative; }
+  .gpick-list { list-style: none; margin: .35rem 0 0; padding: 0; border: 1.5px solid var(--line); border-radius: 12px; overflow: hidden; background: var(--surface); }
+  .gpick-list:empty { display: none; }
+  .gpick-list li { border-top: 1px solid var(--line); }
+  .gpick-list li:first-child { border-top: 0; }
+  .gpick-list button { display: flex; width: 100%; justify-content: space-between; gap: 1rem; text-align: left; font: inherit; color: var(--ink); background: transparent; border: 0; padding: .75rem .9rem; min-height: 48px; cursor: pointer; }
+  .gpick-list button:hover, .gpick-list button:focus-visible { background: var(--bg); }
+  .gpick-list button[disabled] { color: var(--muted); cursor: default; }
+  .gpick-list .note { color: var(--muted); font-size: .86rem; padding: .7rem .9rem; display: block; }
+  .gpick-chosen { display: flex; align-items: center; justify-content: space-between; gap: .8rem; border: 1.5px solid var(--ink); border-radius: 12px; padding: .7rem .9rem; background: var(--surface); }
+  .gpick-chosen b { font-size: 1.05rem; }
+  .gpick-chosen button { font: 600 .9rem var(--body); background: transparent; border: 0; color: var(--ink); text-decoration: underline; cursor: pointer; padding: .3rem; }
   /* Philippine address: street, then region > province > city > barangay, then postal code */
   fieldset.addr { border: 0; padding: 0; margin: 0; min-width: 0; }
   fieldset.addr legend { font-weight: 700; font-size: .93rem; margin-bottom: .45rem; padding: 0; }
@@ -346,6 +359,7 @@
   function renderForm() {
     fields = ev.form.fields;
     $('fields').innerHTML = fields.map(fieldHtml).join('');
+    if (guestMode()) setupGuestPicker();
     const c = ev.form.consent;
     $('consentBlock').hidden = !c.enabled;
     $('privacy').hidden = !(c.title || c.body);
@@ -363,6 +377,60 @@
         if (v !== input.value) input.value = v;
       });
     });
+    syncBadge();
+  }
+
+  // ---------- guest list: pick your own name ----------
+  // The event only accepts people on its list. The name comes from the list (never typed), so the
+  // first and last name boxes are hidden and filled in from the chosen name.
+  const guestMode = () => Boolean(ev && ev.guestList && ev.guestList.enabled);
+  let guest = null, guestTimer = null, guestSeq = 0;
+  function setupGuestPicker() {
+    ['first_name', 'last_name'].forEach((k) => { const el = form.elements[k]; if (el) el.closest('.field').hidden = true; });
+    $('fields').insertAdjacentHTML('afterbegin', `<div class="field full gpick" id="guestBox">
+      <label for="guestQ">Your name</label>
+      <div id="guestFind"><input id="guestQ" type="search" autocomplete="off" autocapitalize="words" spellcheck="false" placeholder="Start typing your last or first name" aria-describedby="guest-hint" aria-controls="guestList">
+        <p class="hint" id="guest-hint">Choose your name from the list. If you can’t find it, please contact the organizer.</p>
+        <ul class="gpick-list" id="guestList" aria-live="polite"></ul></div>
+      <div class="gpick-chosen" id="guestChosen" hidden><b id="guestName"></b><button type="button" id="guestChange">Not you? Change</button></div>
+      <p class="err" id="guest-err"></p></div>`);
+    $('guestQ').addEventListener('input', () => { clearTimeout(guestTimer); guestTimer = setTimeout(findGuest, 250); });
+    $('guestChange').addEventListener('click', () => { pickGuest(null); $('guestQ').focus(); });
+  }
+  async function findGuest() {
+    const q = $('guestQ').value.trim();
+    const list = $('guestList');
+    if (q.length < 2) { list.replaceChildren(); return; }
+    const seq = ++guestSeq;
+    try {
+      const r = await fetch(`/api/e/${encodeURIComponent(slug)}/guests?q=${encodeURIComponent(q)}`);
+      if (seq !== guestSeq) return;
+      if (!r.ok) { list.innerHTML = `<li><span class="note">${PREVIEW ? 'The name search works once registration is open.' : 'The name search isn’t available right now.'}</span></li>`; return; }
+      const { results } = await r.json();
+      if (seq !== guestSeq) return;
+      if (!results.length) { list.innerHTML = '<li><span class="note">No matching name. Try your last name only, or contact the organizer.</span></li>'; return; }
+      list.replaceChildren(...results.map((g) => {
+        const li = document.createElement('li');
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.innerHTML = `<span>${esc(g.name)}</span>${g.registered ? '<span>Already registered</span>' : ''}`;
+        b.disabled = g.registered;
+        b.addEventListener('click', () => pickGuest(g));
+        li.append(b);
+        return li;
+      }));
+    } catch { list.innerHTML = '<li><span class="note">The list could not be reached. Try again.</span></li>'; }
+  }
+  function pickGuest(g) {
+    guest = g;
+    const parts = g ? EG.splitListName(g.name) : { first: '', last: '' };
+    if (form.elements.first_name) form.elements.first_name.value = parts.first;
+    if (form.elements.last_name) form.elements.last_name.value = parts.last;
+    $('guestFind').hidden = Boolean(g);
+    $('guestChosen').hidden = !g;
+    $('guestName').textContent = g ? `${parts.first} ${parts.last}`.trim() : '';
+    if (!g) { $('guestQ').value = ''; $('guestList').replaceChildren(); }
+    setError('guest', '');
     syncBadge();
   }
 
@@ -574,15 +642,17 @@
       data[f.key] = isRadio(el) ? radioValue(el) : el.type === 'checkbox' ? el.checked : el.value;
     });
     data.consent = $('consent').checked;
+    if (guestMode()) data.guestId = guest ? guest.id : null;
     return data;
   }
   function showErrors(errors) {
-    const keys = [...fields.map((f) => f.key), 'consent'];
+    const keys = [...(guestMode() ? ['guest'] : []), ...fields.map((f) => f.key), 'consent'];
     keys.forEach((k) => setError(k, errors[k]));
     const first = keys.find((k) => errors[k]);
     if (!first) return;
     const box = form.querySelector(`fieldset[data-addr="${first}"]`);
     if (box) { const empty = [...box.querySelectorAll('input:not([hidden]), select:not([disabled])')].find((x) => !x.value) || box.querySelector('input'); empty.focus(); return; }
+    if (first === 'guest') { (guest ? $('guestChange') : $('guestQ')).focus(); return; }
     const el = first === 'consent' ? $('consent') : form.elements[first];
     (el instanceof RadioNodeList ? el[0] : el).focus();
   }
@@ -596,6 +666,7 @@
     formMessage('');
     const data = collect();
     const { errors } = EG.checkSubmission({ form: { fields, consent: ev.form.consent } }, data);
+    if (guestMode() && !guest) { delete errors.first_name; delete errors.last_name; errors.guest = 'Choose your name from the list.'; }
     if (Object.keys(errors).length) return showErrors(errors);
     if (!canSubmit) return formMessage(PREVIEW ? 'This is a preview, so the form isn’t submitted. Everything looks valid.' : 'Registration is closed.', 'info');
 
@@ -607,7 +678,7 @@
       const body = await r.json().catch(() => ({}));
       if (r.status === 201) return issuePass(body);
       if (r.status === 422 && body.errors) return showErrors(body.errors);
-      if (r.status === 409) return formMessage(body.message || 'This email is already registered.', 'info');
+      if (r.status === 409) { if (guestMode() && body.message && guest && body.message.startsWith(guest.name)) { pickGuest(null); setError('guest', body.message); return; } return formMessage(body.message || 'This email is already registered.', 'info'); }
       if (r.status === 403 && body.closed) { ev.status = 'closed'; ev.form.closedMessage = body.message; return render(); }
       formMessage(body.message || 'Registration failed. Check your connection and try again.');
     } catch {
@@ -642,6 +713,7 @@
       $('doneMsg').textContent = !p.emailing ? 'Thank you. Your registration is saved.'
         : p.emailSent ? `We've emailed a confirmation to ${p.email}.` : `Your registration is saved. We couldn't send the confirmation email to ${p.email}.`;
       $('doneHint').textContent = ck.enabled ? 'When you arrive, just give your name at the registration desk.' : '';
+      if (p.raffleTickets) $('doneHint').textContent = `You have ${p.raffleTickets} raffle ${p.raffleTickets === 1 ? 'ticket' : 'tickets'}${p.tenure ? `, based on ${p.tenure} years of tenure` : ''}. ${$('doneHint').textContent}`.trim();
       $('doneTitle').focus();
       return;
     }
@@ -665,6 +737,7 @@
       $('doneMsg').textContent = `Your registration is saved, but the email to ${p.email} couldn't be sent.`;
       $('doneHint').textContent = `Download your pass now and bring it on the day. Your pass code is ${p.passCode}.`;
     }
+    if (p.raffleTickets) $('doneHint').textContent += ` You have ${p.raffleTickets} raffle ${p.raffleTickets === 1 ? 'ticket' : 'tickets'}${p.tenure ? `, based on ${p.tenure} years of tenure` : ''}.`;
     form.hidden = true;
     $('done').hidden = false;
     $('doneTitle').focus();
@@ -681,6 +754,7 @@
     syncBadge();
     $('done').hidden = true;
     form.hidden = false;
+    if (guestMode()) pickGuest(null);
     const first = form.querySelector('input, select, textarea');
     if (first) first.focus();
   });
