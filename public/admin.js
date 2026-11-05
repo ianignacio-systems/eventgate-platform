@@ -448,7 +448,7 @@
   }
   function renderClients() {
     $('clientRows').innerHTML = clients.length ? clients.map((c) => `<tr data-id="${c.id}">
-      <td><b>${esc(c.name)}</b>${c.contact ? `<span class="small">${esc(c.contact)}</span>` : ''}</td>
+      <td><b>${esc(c.name)}</b>${c.contact ? `<span class="small">${esc(c.contact)}</span>` : ''}${c.guestList ? '<span class="small">Add-on: Guest list</span>' : ''}</td>
       <td class="num">${nf.format(c.activeEvents)} active${c.maxEvents ? ` of ${nf.format(c.maxEvents)} allowed` : ''}<span class="small">${nf.format(c.events)} in total</span></td>
       <td class="num">${nf.format(c.users)}<span class="small">${plural(c.managers, 'client admin', 'client admins')}</span></td>
       <td>${c.active ? `<span class="badge in">${ICON.check}Active</span>` : '<span class="badge off">Turned off</span>'}</td>
@@ -489,9 +489,10 @@
           { id: 'name', label: 'Client name', value: c.name, maxlength: 100 },
           { id: 'contact', label: 'Contact (optional)', value: c.contact, maxlength: 200 },
           { id: 'max', label: 'Active event limit (optional)', value: c.maxEvents ? String(c.maxEvents) : '', help: 'Events that aren’t archived. Leave blank for no limit. Existing events aren’t affected.' },
+          { id: 'guests', label: 'Guest list add-on', type: 'select', value: c.guestList ? '1' : '0', options: [['0', 'Off'], ['1', 'On']], help: 'Adds a Guest list tab to this client’s events: only people on an uploaded list can register, with raffle tickets from tenure.' },
         ],
         okLabel: 'Save',
-        run: async (v) => { await patch({ name: v.name, contact: v.contact, maxEvents: v.max.trim() || null }); await reloadClients(); },
+        run: async (v) => { await patch({ name: v.name, contact: v.contact, maxEvents: v.max.trim() || null, guestList: v.guests === '1' }); await reloadClients(); },
       });
     } else if (act === 'active') {
       if (!c.active) return patch({ active: true }).then(reloadClients).catch((err) => alert(err.message));
@@ -618,6 +619,7 @@
     $('shareBtn').addEventListener('click', openShare);
     $('backLink').hidden = !canEdit() && events.length <= 1;
     document.querySelectorAll('#evTabs a').forEach((a) => {
+      if (a.dataset.tab === 'guests') a.hidden = !cur.guestListAllowed; // an add-on, switched on per client
       a.href = `#/e/${cur.id}${a.dataset.tab === 'dash' ? '' : `/${a.dataset.tab}`}`;
       if (a.dataset.tab === tab) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
     });
@@ -643,6 +645,7 @@
       catch (err) { if (err.message !== 'signed out') { $('vEvent').hidden = true; $('vEvents').hidden = false; $('evGrid').innerHTML = `<p class="empty" style="grid-column:1/-1">${esc(err.message)}</p>`; } return; }
       if (window.Analysis) window.Analysis.setEvent(cur);
     }
+    if (tab === 'guests' && !cur.guestListAllowed) tab = 'dash';
     renderEventHead();
     $('tDash').hidden = tab !== 'dash';
     $('tData').hidden = tab !== 'data';

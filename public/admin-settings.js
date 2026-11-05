@@ -443,7 +443,7 @@
     email: () => {
       const c = draft.config;
       const chips = [...EG.PLACEHOLDERS, ...c.form.fields.filter((f) => f.enabled && !EG.PLACEHOLDERS.includes(f.key)).map((f) => f.key),
-        ...(c.guestList && c.guestList.enabled ? ['tenure', ...(c.guestList.ticketRule !== 'none' ? ['raffle_tickets'] : [])] : [])];
+        ...(c.guestList && c.guestList.enabled && ev.guestListAllowed !== false ? ['tenure', ...(c.guestList.ticketRule !== 'none' ? ['raffle_tickets'] : [])] : [])];
       const summaryOpts = c.form.fields.filter((f) => f.enabled && !['first_name', 'last_name'].includes(f.key));
       const qr = EG.emailMode(c) === 'qr';
       const sendBox = qr ? '' : `<section class="card stack">
