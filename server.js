@@ -190,6 +190,7 @@ function publicEvent(ev) {
     },
     badge: c.badge,
     checkin: c.checkin,
+    guestList: { enabled: Boolean(c.guestList && c.guestList.enabled), tickets: Boolean(c.guestList && c.guestList.enabled && c.guestList.ticketRule !== 'none' && c.raffle.enabled) },
   };
 }
 const isPublic = (ev) => ev && (ev.status === 'open' || ev.status === 'closed' || ev.status === 'archived');
@@ -212,7 +213,17 @@ async function handleRegister(req, res) {
   const c = ev.config;
   if (ev.status !== 'open') return res.status(403).json({ message: ev.status === 'archived' ? 'This event has ended.' : c.form.closedMessage, closed: true });
 
-  const { values, errors } = EG.checkSubmission(c, req.body || {});
+  // Guest list: the person picks their name from the list; the name (and tenure) come from the list, not the form.
+  let guest = null;
+  const body = { ...(req.body || {}) };
+  if (guestListOn(ev)) {
+    guest = guestQ.byId.get(Number(body.guestId), ev.id);
+    if (!guest) return res.status(422).json({ errors: { guest: 'Choose your name from the list.' } });
+    if (guest.registration_id) return res.status(409).json({ message: `${guest.name} is already registered. If this wasn't you, please contact the organizer.` });
+    body.first_name = guest.first_name;
+    body.last_name = guest.last_name;
+  }
+  const { values, errors } = EG.checkSubmission(c, body);
   for (const f of c.form.fields) {
     const parts = values[`${f.key}__parts`];
     if (f.enabled && f.type === 'address_ph' && parts && !errors[f.key]) {
@@ -230,7 +241,7 @@ async function handleRegister(req, res) {
     sendPass(ev, row).catch((err) => console.error(`[mail] Resend to ${row.email} failed:`, err.message));
     return res.status(409).json({ message: `${row.email} is already registered. We're sending ${c.checkin.qr ? 'that pass' : 'the confirmation'} to the same address again.` });
   };
-  const existing = values.email ? q.byEmail.get(ev.id, values.email) : q.byNameContact.get(ev.id, fullName, values.contact_number || '');
+  const existing = values.email ? q.byEmail.get(ev.id, values.email) : guest ? null : q.byNameContact.get(ev.id, fullName, values.contact_number || '');
   if (existing) return alreadyRegistered(existing);
   if (c.details.capacity && q.counts.get(ev.id).total >= c.details.capacity) {
     return res.status(403).json({ message: 'Sorry, this event is full.', closed: true });
@@ -238,6 +249,12 @@ async function handleRegister(req, res) {
 
   const extra = {};
   for (const [k, v] of Object.entries(values)) if (!EG.BUILTIN.includes(k)) extra[k] = v;
+  const tickets = guest ? guestTickets(ev, guest) : null;
+  if (guest) {
+    extra.guest_id = guest.id;
+    extra.tenure = fmtYears(guest.tenure);
+    extra.raffle_tickets = c.guestList.ticketRule === 'none' ? '' : String(tickets);
+  }
   const rec = {
     event_id: ev.id,
     first_name: values.first_name, last_name: values.last_name, full_name: fullName,
@@ -258,6 +275,14 @@ async function handleRegister(req, res) {
     }
   }
   if (!row) return res.status(500).json({ message: 'Registration could not be saved. Try again.' });
+  if (guest) {
+    // Two people picking the same name at the same moment: only the first one keeps it.
+    if (!guestQ.claim.run(row.id, guest.id, ev.id).changes) {
+      db.prepare('DELETE FROM registrations WHERE id = ?').run(row.id);
+      return res.status(409).json({ message: `${guest.name} is already registered. If this wasn't you, please contact the organizer.` });
+    }
+    if (c.guestList.ticketRule !== 'none' && tickets !== 1) entriesQ.set.run({ rid: row.id, e: ev.id, n: tickets, note: `Tenure ${fmtYears(guest.tenure)} years`, by: 'Guest list' });
+  }
   bus.emit('change', { type: 'registered', eventId: ev.id });
 
   const png = await qrPng(tokenFor(row.pass_code));
@@ -271,6 +296,8 @@ async function handleRegister(req, res) {
     email: row.email || '',
     emailing,
     emailSent,
+    raffleTickets: guest && c.guestList.ticketRule !== 'none' && c.raffle.enabled ? tickets : null,
+    tenure: guest ? fmtYears(guest.tenure) : null,
     qr: c.checkin.qr ? `data:image/png;base64,${png.toString('base64')}` : null,
   });
 }
@@ -835,6 +862,7 @@ app.post('/api/admin/events', requireEditor, (req, res) => {
     config.branding.logo = copyLogo(config.branding.logo);
     config.branding.logo2 = copyLogo(config.branding.logo2);
     config.raffle = { ...config.raffle, enabled: false, pin: '' }; // a copied event gets its own raffle and PIN
+    config.guestList = { ...config.guestList, enabled: false }; // the list itself isn't copied
   } else {
     config = EG.defaultConfig({ name });
   }
@@ -872,6 +900,7 @@ app.put('/api/admin/events/:id', requireEditor, withEvent, (req, res) => {
   if (b.config !== undefined) {
     config = EG.sanitizeConfig(b.config, ev.config);
     config.raffle = ev.config.raffle; // changed only on the Raffle tab, so an open Settings page can't undo it
+    config.guestList = ev.config.guestList; // changed only on the Guest list tab
     for (const k of ['logo', 'logo2']) {
       if (config.branding[k] && !fs.existsSync(path.join(uploadsDir, path.basename(config.branding[k])))) config.branding[k] = ev.config.branding[k];
     }
@@ -898,6 +927,7 @@ app.delete('/api/admin/events/:id', requireEditor, withEvent, (req, res) => {
     db.prepare('DELETE FROM saved_charts WHERE event_id = ?').run(ev.id);
     db.prepare('DELETE FROM raffle_draws WHERE event_id = ?').run(ev.id);
     db.prepare('DELETE FROM raffle_prizes WHERE event_id = ?').run(ev.id);
+    db.prepare('DELETE FROM guests WHERE event_id = ?').run(ev.id);
     db.prepare('DELETE FROM raffle_entries WHERE event_id = ?').run(ev.id);
     db.prepare('DELETE FROM user_events WHERE event_id = ?').run(ev.id);
     if (getSetting('home_event') === ev.slug) setSetting('home_event', '');
@@ -950,6 +980,7 @@ function sampleValues(config) {
   const sample = { text: 'Sample answer', textarea: 'Sample address, Clark Freeport Zone', phone_ph: '+63 9171234567', phone: '+65 6123 4567', number: '2', date: '2026-11-12', checkbox: 'Yes', yesno: 'Yes' };
   const v = { first_name: 'Juan', last_name: 'dela Cruz', email: 'juan@example.com', designation: 'Operations Manager', company_name: 'Sample Company Inc.' };
   for (const f of config.form.fields) if (!v[f.key]) v[f.key] = f.options ? f.options[0] : sample[f.type] || 'Sample';
+  if (config.guestList && config.guestList.enabled) { v.tenure = '3.2'; v.raffle_tickets = String(EG.ticketsFor(config.guestList.ticketRule, 3.2, 3.2)); }
   return v;
 }
 const previewEvent = (ev, body) => ({ ...ev, config: body && body.config ? withImageDims(EG.sanitizeConfig(body.config, ev.config)) : ev.config });
@@ -1253,6 +1284,216 @@ app.post('/api/admin/events/:id/raffle/entries/reset', ...evOwner$, (req, res) =
   res.json({ ok: true, state: raffleState(req.ev) });
 });
 
+// ---------------------------------------------------------------- guest list
+// For internal events (a company party): only people on an uploaded list can register, each picking their own
+// name, and raffle tickets come from the list (years of tenure), never from what people type.
+const guestQ = {
+  list: db.prepare(`SELECT g.*, r.email AS reg_email, r.created_at AS reg_at, r.email_sent_at AS reg_mailed, r.pass_code AS reg_code
+    FROM guests g LEFT JOIN registrations r ON r.id = g.registration_id WHERE g.event_id = ? ORDER BY g.name COLLATE NOCASE`),
+  byId: db.prepare('SELECT * FROM guests WHERE id = ? AND event_id = ?'),
+  byName: db.prepare('SELECT * FROM guests WHERE event_id = ? AND name = ? COLLATE NOCASE'),
+  search: db.prepare(`SELECT id, name, registration_id FROM guests WHERE event_id = @e
+    AND (name LIKE @q ESCAPE '\\' OR (first_name || ' ' || last_name) LIKE @q ESCAPE '\\') ORDER BY name COLLATE NOCASE LIMIT 8`),
+  insert: db.prepare('INSERT INTO guests (event_id, name, first_name, last_name, tenure, tickets) VALUES (@e, @name, @first, @last, @tenure, @tickets)'),
+  update: db.prepare('UPDATE guests SET name = @name, first_name = @first, last_name = @last, tenure = @tenure, tickets = @tickets WHERE id = @id'),
+  removeFree: db.prepare('DELETE FROM guests WHERE event_id = ? AND registration_id IS NULL'),
+  claim: db.prepare('UPDATE guests SET registration_id = ? WHERE id = ? AND event_id = ? AND registration_id IS NULL'),
+  release: db.prepare('UPDATE guests SET registration_id = NULL WHERE id = ?'),
+  releaseAll: db.prepare('UPDATE guests SET registration_id = NULL WHERE event_id = ?'),
+  count: db.prepare('SELECT COUNT(*) AS total, COUNT(registration_id) AS registered FROM guests WHERE event_id = ?'),
+};
+const guestListOn = (ev) => Boolean(ev.config.guestList && ev.config.guestList.enabled);
+const fmtYears = (t) => (t == null ? '' : String(Math.round(t * 10) / 10));
+const guestTickets = (ev, g) => EG.ticketsFor(ev.config.guestList.ticketRule, g.tenure, g.tickets);
+
+// Writes each registered guest's tickets into the raffle (and the email details), from the list and the rule.
+// Entries a staff member changed by hand on the Raffle tab are left alone.
+function syncGuestTickets(ev) {
+  const rule = ev.config.guestList.ticketRule;
+  const manual = new Set(db.prepare("SELECT registration_id FROM raffle_entries WHERE event_id = ? AND updated_by != 'Guest list'").all(ev.id).map((r) => r.registration_id));
+  db.transaction(() => {
+    db.prepare("DELETE FROM raffle_entries WHERE event_id = ? AND updated_by = 'Guest list'").run(ev.id);
+    for (const g of db.prepare('SELECT * FROM guests WHERE event_id = ? AND registration_id IS NOT NULL').all(ev.id)) {
+      const row = db.prepare('SELECT id, extra FROM registrations WHERE id = ?').get(g.registration_id);
+      if (!row) { guestQ.release.run(g.id); continue; }
+      const n = guestTickets(ev, g);
+      let extra = {};
+      try { extra = JSON.parse(row.extra || '{}'); } catch {}
+      extra.guest_id = g.id; extra.tenure = fmtYears(g.tenure); extra.raffle_tickets = rule === 'none' ? '' : String(n);
+      db.prepare('UPDATE registrations SET extra = ? WHERE id = ?').run(JSON.stringify(extra), row.id);
+      if (rule !== 'none' && n !== 1 && !manual.has(row.id)) {
+        entriesQ.set.run({ rid: row.id, e: ev.id, n, note: `Tenure ${fmtYears(g.tenure)} years`, by: 'Guest list' });
+      }
+    }
+  })();
+}
+// After a restore or a reset the registrations have new numbers: link each guest to theirs again.
+function relinkGuests(ev) {
+  guestQ.releaseAll.run(ev.id);
+  for (const r of db.prepare('SELECT id, extra FROM registrations WHERE event_id = ?').all(ev.id)) {
+    let gid = null;
+    try { gid = JSON.parse(r.extra || '{}').guest_id; } catch {}
+    if (gid) guestQ.claim.run(r.id, Number(gid), ev.id);
+  }
+  if (guestListOn(ev)) syncGuestTickets(ev);
+}
+
+// Reads the uploaded list (Excel or CSV): a name column, and optionally tenure (years) and tickets columns.
+async function readGuestFile(buf, type) {
+  let rows = [];
+  if (/sheet|excel|xlsx/.test(type) || buf.slice(0, 2).toString() === 'PK') {
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.load(buf);
+    const ws = wb.worksheets[0];
+    if (!ws) return { error: 'The file has no sheets.' };
+    ws.eachRow({ includeEmpty: false }, (row) => {
+      const vals = [];
+      row.eachCell({ includeEmpty: true }, (cell, col) => {
+        let v = cell.value;
+        if (v && typeof v === 'object') v = v.result ?? v.text ?? (v.richText ? v.richText.map((t) => t.text).join('') : '');
+        vals[col - 1] = v;
+      });
+      rows.push(vals);
+    });
+  } else {
+    const text = buf.toString('utf8').replace(/^﻿/, '');
+    for (const line of text.split(/\r?\n/)) {
+      if (!line.trim()) continue;
+      const out = []; let cur = '', quoted = false;
+      for (let i = 0; i < line.length; i++) {
+        const ch = line[i];
+        if (quoted) { if (ch === '"' && line[i + 1] === '"') { cur += '"'; i++; } else if (ch === '"') quoted = false; else cur += ch; }
+        else if (ch === '"') quoted = true; else if (ch === ',') { out.push(cur); cur = ''; } else cur += ch;
+      }
+      out.push(cur);
+      rows.push(out);
+    }
+  }
+  const text = (v) => String(v ?? '').replace(/\s+/g, ' ').trim();
+  const headAt = rows.findIndex((r) => r.some((v) => /name/i.test(text(v))));
+  if (headAt < 0) return { error: 'No column called “Name” was found. The first row with headings needs a name column, such as “Employee name”.' };
+  const head = rows[headAt].map(text);
+  const col = (re) => head.findIndex((h) => re.test(h));
+  const nameCol = col(/name/i), tenureCol = col(/tenure|years?/i), ticketCol = col(/ticket|entr/i);
+  const num = (v) => { const n = typeof v === 'number' ? v : Number(text(v).replace(/,/g, '')); return text(v) === '' || !Number.isFinite(n) ? null : n; };
+  const people = [], problems = [], seen = new Set();
+  rows.slice(headAt + 1).forEach((r, i) => {
+    const name = text(r[nameCol]);
+    if (!name) return;
+    const line = headAt + i + 2;
+    const key = name.toLowerCase();
+    if (seen.has(key)) { problems.push(`Row ${line}: “${name}” appears twice; only the first is kept.`); return; }
+    seen.add(key);
+    const tenure = tenureCol >= 0 ? num(r[tenureCol]) : null, tickets = ticketCol >= 0 ? num(r[ticketCol]) : null;
+    if (tenureCol >= 0 && tenure == null) problems.push(`Row ${line}: “${name}” has no tenure, so gets 1 ticket.`);
+    if (tenure != null && tickets != null && Math.abs(tickets - Math.round(tenure * 10) / 10) > 0.051) {
+      problems.push(`Row ${line}: “${name}” has ${fmtYears(tenure)} years of tenure but ${tickets} tickets in the file. Check which is right.`);
+    }
+    const { first, last } = EG.splitListName(name);
+    people.push({ name: name.slice(0, 150), first, last, tenure, tickets });
+  });
+  if (!people.length) return { error: 'No names were found under the name column.' };
+  if (people.length > 5000) return { error: 'The list can have up to 5,000 people.' };
+  return { people, problems, columns: { name: head[nameCol], tenure: tenureCol >= 0 ? head[tenureCol] : null, tickets: ticketCol >= 0 ? head[ticketCol] : null } };
+}
+
+function guestListOut(ev) {
+  const gl = ev.config.guestList;
+  const list = guestQ.list.all(ev.id).map((g) => ({
+    id: g.id, name: g.name, tenure: g.tenure, tickets: g.tickets, raffleTickets: guestTickets(ev, g),
+    registered: Boolean(g.registration_id), email: g.reg_email || '', registeredAt: sqlTimeToIso(g.reg_at), emailed: Boolean(g.reg_mailed),
+  }));
+  return {
+    enabled: gl.enabled, ticketRule: gl.ticketRule, rules: EG.TICKET_RULES, list, slug: ev.slug, status: ev.status,
+    counts: { total: list.length, registered: list.filter((g) => g.registered).length },
+    otherRegistrations: db.prepare("SELECT COUNT(*) AS n FROM registrations WHERE event_id = ? AND id NOT IN (SELECT registration_id FROM guests WHERE event_id = ? AND registration_id IS NOT NULL)").get(ev.id, ev.id).n,
+    raffle: { enabled: ev.config.raffle.enabled, entries: ev.config.raffle.entries },
+  };
+}
+const saveConfig = (ev, config) => { evQ.update.run({ id: ev.id, slug: ev.slug, status: ev.status, staff_pin: ev.staffPin, config: JSON.stringify(config) }); return eventById(ev.id); };
+
+app.get('/api/admin/events/:id/guests', ...evOwner$, (req, res) => res.json(guestListOut(req.ev)));
+app.put('/api/admin/events/:id/guests/settings', ...evOwner$, (req, res) => {
+  const ev = req.ev, b = req.body || {};
+  const gl = { ...ev.config.guestList };
+  if (b.enabled !== undefined) gl.enabled = Boolean(b.enabled);
+  if (b.ticketRule !== undefined && EG.TICKET_RULES[b.ticketRule]) gl.ticketRule = b.ticketRule;
+  if (gl.enabled && !guestQ.count.get(ev.id).total) return res.status(422).json({ message: 'Upload the list first.' });
+  const raffle = { ...ev.config.raffle };
+  // Tickets from the list are raffle entries, so the raffle counts entries per person.
+  if (gl.enabled && gl.ticketRule !== 'none') raffle.entries = 'staff';
+  const fresh = saveConfig(ev, { ...ev.config, guestList: gl, raffle });
+  syncGuestTickets(fresh);
+  raffleChanged(fresh);
+  res.json(guestListOut(fresh));
+});
+app.post('/api/admin/events/:id/guests/upload', ...evOwner$, express.raw({ type: () => true, limit: '5mb' }), async (req, res) => {
+  const ev = req.ev;
+  if (!Buffer.isBuffer(req.body) || !req.body.length) return res.status(422).json({ message: 'Choose an Excel (.xlsx) or CSV file.' });
+  let parsed;
+  try { parsed = await readGuestFile(req.body, String(req.get('content-type') || '')); }
+  catch { return res.status(422).json({ message: 'The file could not be read. Save it as an Excel workbook (.xlsx) or CSV and try again.' }); }
+  if (parsed.error) return res.status(422).json({ message: parsed.error });
+  // Replaces the list. People already registered stay linked: they are matched by name and keep their registration.
+  let added = 0, updated = 0;
+  const inFile = new Set(parsed.people.map((p) => p.name.toLowerCase()));
+  const keptOff = [];
+  db.transaction(() => {
+    guestQ.removeFree.run(ev.id);
+    for (const p of parsed.people) {
+      const old = guestQ.byName.get(ev.id, p.name);
+      if (old) { guestQ.update.run({ id: old.id, ...p }); updated++; } else { guestQ.insert.run({ e: ev.id, ...p }); added++; }
+    }
+    for (const g of db.prepare('SELECT name FROM guests WHERE event_id = ? AND registration_id IS NOT NULL').all(ev.id)) {
+      if (!inFile.has(g.name.toLowerCase())) keptOff.push(g.name);
+    }
+  })();
+  if (keptOff.length) parsed.problems.push(`${keptOff.length} already registered ${keptOff.length === 1 ? 'person is' : 'people are'} not in the new file and ${keptOff.length === 1 ? 'was' : 'were'} kept: ${keptOff.slice(0, 5).join('; ')}${keptOff.length > 5 ? '…' : ''}.`);
+  syncGuestTickets(ev);
+  bus.emit('change', { type: 'guests', eventId: ev.id });
+  res.json({ ...guestListOut(eventById(ev.id)), upload: { people: parsed.people.length, problems: parsed.problems, columns: parsed.columns } });
+});
+// Undo a registration made under someone's name (for example by a colleague by mistake): frees the name.
+app.delete('/api/admin/events/:id/guests/:gid/registration', ...evOwner$, (req, res) => {
+  const ev = req.ev;
+  const g = guestQ.byId.get(Number(req.params.gid), ev.id);
+  if (!g || !g.registration_id) return res.status(404).json({ message: 'That person is not registered.' });
+  if (db.prepare('SELECT COUNT(*) AS n FROM raffle_draws WHERE registration_id = ?').get(g.registration_id).n) {
+    return res.status(409).json({ message: 'This person was already drawn in the raffle, so the registration stays in the raffle record.' });
+  }
+  createBackup(ev, `Automatic backup before removing the registration of ${g.name}`, req.auth.name, { skipIfEmpty: true });
+  db.transaction(() => {
+    db.prepare('DELETE FROM raffle_entries WHERE registration_id = ?').run(g.registration_id);
+    db.prepare('DELETE FROM registrations WHERE id = ? AND event_id = ?').run(g.registration_id, ev.id);
+    guestQ.release.run(g.id);
+  })();
+  bus.emit('change', { type: 'registered', eventId: ev.id });
+  res.json(guestListOut(ev));
+});
+app.get('/api/admin/events/:id/guests.xlsx', ...evOwner$, async (req, res) => {
+  const ev = req.ev, out = guestListOut(ev);
+  const only = req.query.only === 'missing' ? out.list.filter((g) => !g.registered) : out.list;
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet(req.query.only === 'missing' ? 'Not registered' : 'Guest list');
+  ws.columns = [{ header: 'Name', width: 34 }, { header: 'Tenure (years)', width: 14 }, { header: 'Raffle tickets', width: 13 }, { header: 'Registered', width: 12 }, { header: 'Email', width: 32 }];
+  ws.getRow(1).font = { bold: true };
+  for (const g of only) ws.addRow([g.name, g.tenure == null ? '' : Math.round(g.tenure * 10) / 10, out.ticketRule === 'none' ? 1 : g.raffleTickets, g.registered ? 'Yes' : 'No', g.email]);
+  res.set('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.set('Content-Disposition', `attachment; filename="${fileSlug(ev)}-${req.query.only === 'missing' ? 'not-registered' : 'guest-list'}.xlsx"`);
+  res.send(Buffer.from(await wb.xlsx.writeBuffer()));
+});
+// The registration page's name search. Only names (no tenure) are shown, and only after 2 letters.
+const guestSearchLimiter = rateLimit({ windowMs: 60 * 1000, limit: 120, handler: tooMany('Too many searches. Wait a moment.') });
+app.get('/api/e/:slug/guests', guestSearchLimiter, (req, res) => {
+  const ev = eventForPublic(req);
+  if (!ev || !guestListOn(ev) || ev.status !== 'open') return notFound(res);
+  const term = String(req.query.q || '').replace(/\s+/g, ' ').trim();
+  if (term.length < 2) return res.json({ results: [] });
+  const like = `%${term.replace(/,/g, '').replace(/[\\%_]/g, (ch) => `\\${ch}`).split(' ').join('%')}%`;
+  const results = guestQ.search.all({ e: ev.id, q: like }).map((g) => ({ id: g.id, name: g.name, registered: Boolean(g.registration_id) }));
+  res.json({ results });
+});
+
 function setDrawStatus(ev, drawId, status) {
   const d = raffleQ.draw.get(Number(drawId), ev.id);
   if (!d) throw Object.assign(new Error('That draw was not found.'), { status: 404 });
@@ -1461,7 +1702,10 @@ async function buildWorkbook(ev, rows) {
     ws.headerFooter.oddFooter = `&L${c.details.name.replace(/&/g, '&&')}&RPage &P of &N`;
   }
 
+  const glOn = c.guestList && c.guestList.enabled;
+  const xOf = (r) => { try { return JSON.parse(r.extra || '{}'); } catch { return {}; } };
   addSheet('Registered', 'Registration Report', rows, [
+    ...(glOn ? [{ label: 'Tenure (years)', width: 10, get: (r) => (xOf(r).tenure ? Number(xOf(r).tenure) : '') }, ...(c.guestList.ticketRule !== 'none' ? [{ label: 'Raffle tickets', width: 9, get: (r) => (xOf(r).raffle_tickets ? Number(xOf(r).raffle_tickets) : '') }] : [])] : []),
     { label: 'Registered on', width: 17, get: (r) => local(r.created_at) },
     ...(withMail ? [{ label: 'Confirmation emailed', width: 14, get: (r) => (r.email_sent_at ? 'Yes' : r.email ? 'No' : 'No email given') }] : []),
     ...(withCheckin ? [{ label: 'Attended', width: 11, get: (r) => (r.checked_in_at ? 'Yes' : 'No') }] : []),
@@ -1631,6 +1875,7 @@ app.post('/api/admin/events/:id/data/delete-all', ...evOwner$, (req, res) => {
   const changed = db.prepare('DELETE FROM registrations WHERE event_id = ?').run(req.ev.id).changes;
   db.prepare('DELETE FROM raffle_draws WHERE event_id = ?').run(req.ev.id); // the winners were among those records
   db.prepare('DELETE FROM raffle_entries WHERE event_id = ?').run(req.ev.id);
+  guestQ.releaseAll.run(req.ev.id);
   bus.emit('change', { type: 'reset', eventId: req.ev.id });
   res.json({ ok: true, changed, backup: backupOut(backup) });
 });
@@ -1659,6 +1904,8 @@ app.post('/api/admin/events/:id/backups/:bid/restore', ...evOwner$, (req, res) =
   } finally {
     db.prepare('DETACH DATABASE restore_src').run();
   }
+  db.prepare('DELETE FROM raffle_entries WHERE event_id = ?').run(ev.id); // they pointed at the replaced records
+  relinkGuests(ev);
   bus.emit('change', { type: 'reset', eventId: ev.id });
   res.json({ ok: true, restored: q.counts.get(ev.id), backup: backupOut(before) });
 });

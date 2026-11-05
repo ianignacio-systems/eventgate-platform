@@ -132,6 +132,13 @@ function openDb(dbPath, env = process.env) {
   db.exec(`CREATE TABLE IF NOT EXISTS raffle_entries (
     registration_id INTEGER PRIMARY KEY, event_id INTEGER NOT NULL, entries INTEGER NOT NULL, note TEXT NOT NULL DEFAULT '',
     updated_at TEXT NOT NULL DEFAULT (datetime('now')), updated_by TEXT NOT NULL DEFAULT '')`);
+  // Guest list (added in 1.1): only the people on it can register, each picking their own name.
+  // Tenure and tickets come from the uploaded file; registration_id links the person once registered.
+  db.exec(`CREATE TABLE IF NOT EXISTS guests (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, event_id INTEGER NOT NULL, name TEXT NOT NULL, first_name TEXT NOT NULL DEFAULT '',
+    last_name TEXT NOT NULL DEFAULT '', tenure REAL, tickets REAL, registration_id INTEGER UNIQUE,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')))`);
+  db.exec('CREATE INDEX IF NOT EXISTS guests_event ON guests (event_id, name)');
   if (!hasTable('saved_charts')) {
     db.exec(`CREATE TABLE saved_charts (
       id INTEGER PRIMARY KEY AUTOINCREMENT, event_id INTEGER NOT NULL DEFAULT 0, title TEXT NOT NULL, dimension TEXT NOT NULL,
