@@ -254,6 +254,7 @@ async function handleRegister(req, res) {
     extra.guest_id = guest.id;
     extra.tenure = fmtYears(guest.tenure);
     extra.raffle_tickets = c.guestList.ticketRule === 'none' ? '' : String(tickets);
+    extra.raffle_note = raffleNote(ev, guest, tickets);
   }
   const rec = {
     event_id: ev.id,
@@ -983,7 +984,7 @@ function sampleValues(config) {
   const sample = { text: 'Sample answer', textarea: 'Sample address, Clark Freeport Zone', phone_ph: '+63 9171234567', phone: '+65 6123 4567', number: '2', date: '2026-11-12', checkbox: 'Yes', yesno: 'Yes' };
   const v = { first_name: 'Juan', last_name: 'dela Cruz', email: 'juan@example.com', designation: 'Operations Manager', company_name: 'Sample Company Inc.' };
   for (const f of config.form.fields) if (!v[f.key]) v[f.key] = f.options ? f.options[0] : sample[f.type] || 'Sample';
-  if (config.guestList && config.guestList.enabled) { v.tenure = '3.2'; v.raffle_tickets = String(EG.ticketsFor(config.guestList.ticketRule, 3.2, 3.2)); }
+  if (config.guestList && config.guestList.enabled) { v.tenure = '3.2'; v.raffle_tickets = String(EG.ticketsFor(config.guestList.ticketRule, 3.2, 3.2)); v.raffle_note = config.guestList.ticketRule === 'none' ? '' : `You have ${v.raffle_tickets} raffle tickets, based on 3.2 years of tenure.`; }
   return v;
 }
 const previewEvent = (ev, body) => ({ ...ev, config: body && body.config ? withImageDims(EG.sanitizeConfig(body.config, ev.config)) : ev.config });
@@ -1311,7 +1312,16 @@ const guestListAllowed = (ev) => !ev.clientId || Boolean((clientQ.byId.get(ev.cl
 const guestListOn = (ev) => Boolean(ev.config.guestList && ev.config.guestList.enabled) && guestListAllowed(ev);
 const guestFeature = (req, res, next) => (guestListAllowed(req.ev) ? next() : res.status(403).json({ message: 'The guest list isn’t available for this client. The platform administrator can switch it on.' }));
 const fmtYears = (t) => (t == null ? '' : String(Math.round(t * 10) / 10));
-const guestTickets = (ev, g) => EG.ticketsFor(ev.config.guestList.ticketRule, g.tenure, g.tickets);
+// One ready-made sentence for the email ({raffle_note}): the tickets, or why there are none.
+function raffleNote(ev, g, n) {
+  if (ev.config.guestList.ticketRule === 'none') return '';
+  if (n === 0) {
+    const min = EG.MIN_TENURES.find(([v]) => v === ev.config.guestList.minTenure);
+    return min && min[0] ? `Raffle tickets start at ${min[1]} of tenure, so you don’t have raffle tickets this time.` : 'You don’t have raffle tickets this time.';
+  }
+  return `You have ${n} raffle ${n === 1 ? 'ticket' : 'tickets'}${g.tenure != null ? `, based on ${fmtYears(g.tenure)} years of tenure` : ''}.`;
+}
+const guestTickets = (ev, g) => EG.ticketsFor(ev.config.guestList.ticketRule, g.tenure, g.tickets, ev.config.guestList.minTenure);
 
 // Writes each registered guest's tickets into the raffle (and the email details), from the list and the rule.
 // Entries a staff member changed by hand on the Raffle tab are left alone.
@@ -1326,7 +1336,7 @@ function syncGuestTickets(ev) {
       const n = guestTickets(ev, g);
       let extra = {};
       try { extra = JSON.parse(row.extra || '{}'); } catch {}
-      extra.guest_id = g.id; extra.tenure = fmtYears(g.tenure); extra.raffle_tickets = rule === 'none' ? '' : String(n);
+      extra.guest_id = g.id; extra.tenure = fmtYears(g.tenure); extra.raffle_tickets = rule === 'none' ? '' : String(n); extra.raffle_note = raffleNote(ev, g, n);
       db.prepare('UPDATE registrations SET extra = ? WHERE id = ?').run(JSON.stringify(extra), row.id);
       if (rule !== 'none' && n !== 1 && !manual.has(row.id)) {
         entriesQ.set.run({ rid: row.id, e: ev.id, n, note: `Tenure ${fmtYears(g.tenure)} years`, by: 'Guest list' });
@@ -1411,7 +1421,7 @@ function guestListOut(ev) {
     registered: Boolean(g.registration_id), email: g.reg_email || '', registeredAt: sqlTimeToIso(g.reg_at), emailed: Boolean(g.reg_mailed),
   }));
   return {
-    enabled: gl.enabled, ticketRule: gl.ticketRule, rules: EG.TICKET_RULES, list, slug: ev.slug, status: ev.status,
+    enabled: gl.enabled, ticketRule: gl.ticketRule, rules: EG.TICKET_RULES, minTenure: gl.minTenure || 0, minTenures: EG.MIN_TENURES, list, slug: ev.slug, status: ev.status,
     counts: { total: list.length, registered: list.filter((g) => g.registered).length },
     otherRegistrations: db.prepare("SELECT COUNT(*) AS n FROM registrations WHERE event_id = ? AND id NOT IN (SELECT registration_id FROM guests WHERE event_id = ? AND registration_id IS NOT NULL)").get(ev.id, ev.id).n,
     raffle: { enabled: ev.config.raffle.enabled, entries: ev.config.raffle.entries },
@@ -1425,6 +1435,7 @@ app.put('/api/admin/events/:id/guests/settings', ...evOwner$, guestFeature, (req
   const gl = { ...ev.config.guestList };
   if (b.enabled !== undefined) gl.enabled = Boolean(b.enabled);
   if (b.ticketRule !== undefined && EG.TICKET_RULES[b.ticketRule]) gl.ticketRule = b.ticketRule;
+  if (b.minTenure !== undefined && EG.MIN_TENURES.some(([v]) => v === Number(b.minTenure))) gl.minTenure = Number(b.minTenure);
   if (gl.enabled && !guestQ.count.get(ev.id).total) return res.status(422).json({ message: 'Upload the list first.' });
   const raffle = { ...ev.config.raffle };
   // Tickets from the list are raffle entries, so the raffle counts entries per person.
@@ -1712,7 +1723,7 @@ async function buildWorkbook(ev, rows) {
   const glOn = guestListOn(ev);
   const xOf = (r) => { try { return JSON.parse(r.extra || '{}'); } catch { return {}; } };
   addSheet('Registered', 'Registration Report', rows, [
-    ...(glOn ? [{ label: 'Tenure (years)', width: 10, get: (r) => (xOf(r).tenure ? Number(xOf(r).tenure) : '') }, ...(c.guestList.ticketRule !== 'none' ? [{ label: 'Raffle tickets', width: 9, get: (r) => (xOf(r).raffle_tickets ? Number(xOf(r).raffle_tickets) : '') }] : [])] : []),
+    ...(glOn ? [{ label: 'Tenure (years)', width: 10, get: (r) => (xOf(r).tenure ? Number(xOf(r).tenure) : '') }, ...(c.guestList.ticketRule !== 'none' ? [{ label: 'Raffle tickets', width: 9, get: (r) => (xOf(r).raffle_tickets !== undefined && xOf(r).raffle_tickets !== '' ? Number(xOf(r).raffle_tickets) : '') }] : [])] : []),
     { label: 'Registered on', width: 17, get: (r) => local(r.created_at) },
     ...(withMail ? [{ label: 'Confirmation emailed', width: 14, get: (r) => (r.email_sent_at ? 'Yes' : r.email ? 'No' : 'No email given') }] : []),
     ...(withCheckin ? [{ label: 'Attended', width: 11, get: (r) => (r.checked_in_at ? 'Yes' : 'No') }] : []),
