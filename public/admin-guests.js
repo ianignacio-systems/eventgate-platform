@@ -44,7 +44,7 @@
     return list.map((g) => `<tr data-gid="${g.id}">
       <td><b style="font-weight:600">${esc(g.name)}</b></td>
       <td style="text-align:right">${years(g.tenure)}</td>
-      ${tickets ? `<td style="text-align:right">${g.raffleTickets}</td>` : ''}
+      ${tickets ? `<td style="text-align:right">${g.raffleTickets === 0 ? '<span style="color:var(--muted)" title="Below the minimum tenure">0</span>' : g.raffleTickets}</td>` : ''}
       <td>${g.registered ? `<span class="badge in">Registered</span><div class="small">${esc(g.email || 'No email')} · ${esc(fmtTime(g.registeredAt))}</div>` : '<span class="badge out">Not yet</span>'}</td>
       <td style="text-align:right">${g.registered ? '<button class="btn btn-quiet btn-sm" type="button" data-undo>Remove registration</button>' : ''}</td>
     </tr>`).join('');
@@ -54,6 +54,7 @@
     const has = st.counts.total > 0;
     const tickets = st.ticketRule !== 'none';
     const pct = has ? Math.round((st.counts.registered / st.counts.total) * 100) : 0;
+    const below = st.list.filter((g) => g.raffleTickets === 0).length;
     root.innerHTML = `
       <section class="card stack">
         <label class="check" style="align-items:flex-start"><input type="checkbox" id="gOn"${st.enabled ? ' checked' : ''}${has ? '' : ' disabled'}>
@@ -61,7 +62,10 @@
         ${st.otherRegistrations && st.enabled ? `<p class="notice warn" style="margin:0">${A.nf.format(st.otherRegistrations)} ${st.otherRegistrations === 1 ? 'registration was' : 'registrations were'} made before the guest list was turned on and ${st.otherRegistrations === 1 ? 'is' : 'are'} not linked to a name on the list.</p>` : ''}
         <div class="field" style="margin:0"><label for="gRule">Raffle tickets from tenure</label>
           <select id="gRule">${Object.entries(st.rules).map(([k, l]) => `<option value="${k}"${k === st.ticketRule ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select>
-          <p class="help">${tickets ? (st.raffle.enabled ? 'Tickets are raffle entries: someone with 5 tickets is five times as likely to win as someone with 1. The confirmation email can show them with {raffle_tickets} and {tenure}.' : 'Turn on the raffle in the Raffle tab to use these tickets.') : 'Everyone on the list has the same chance in the raffle.'} Changing the rule updates everyone, including people already registered, but emails already sent don’t change.</p></div>
+          <p class="help">${tickets ? (st.raffle.enabled ? 'Tickets are raffle entries: someone with 5 tickets is five times as likely to win as someone with 1. In the confirmation email, {raffle_note} gives a ready-made sentence (the tickets, or why there are none); {raffle_tickets} and {tenure} give just the numbers.' : 'Turn on the raffle in the Raffle tab to use these tickets.') : 'Everyone on the list has the same chance in the raffle.'} Changing the rule updates everyone, including people already registered, but emails already sent don’t change.</p></div>
+        ${tickets ? `<div class="field" style="margin:0"><label for="gMin">Minimum tenure for raffle tickets</label>
+          <select id="gMin">${st.minTenures.map(([v, l]) => `<option value="${v}"${v === st.minTenure ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select>
+          <p class="help">${st.minTenure ? `People with less tenure get 0 tickets and aren’t in the raffle draw. They can still register. <b>${A.nf.format(below)}</b> on the list ${below === 1 ? 'is' : 'are'} below it.` : 'Everyone on the list gets at least 1 ticket.'}</p></div>` : ''}
       </section>
 
       <section class="card stack">
@@ -103,6 +107,7 @@
   function wire() {
     $('gOn').addEventListener('change', (e) => act(() => A.post(`${base()}/settings`, { enabled: e.target.checked }, 'PUT')));
     $('gRule').addEventListener('change', (e) => act(() => A.post(`${base()}/settings`, { ticketRule: e.target.value }, 'PUT')));
+    if ($('gMin')) $('gMin').addEventListener('change', (e) => act(() => A.post(`${base()}/settings`, { minTenure: Number(e.target.value) }, 'PUT')));
     $('gUpload').addEventListener('click', async () => {
       const file = $('gFile').files[0];
       $('gErr').textContent = '';
