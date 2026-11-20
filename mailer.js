@@ -7,18 +7,26 @@ const EG = require('./lib/shared');
 let transporter = null;
 let devMode = false;
 
+// Values pasted into the host's settings can carry invisible spaces, line breaks or quotation marks.
+const clean = (v) => String(v || '').trim().replace(/^(["'])(.*)\1$/s, '$2').trim();
+const smtpSettings = () => ({
+  host: clean(process.env.SMTP_HOST), port: Number(clean(process.env.SMTP_PORT)) || 587,
+  user: clean(process.env.SMTP_USER), pass: clean(process.env.SMTP_PASS),
+});
+
 function getTransport() {
   if (transporter) return transporter;
-  if (process.env.SMTP_HOST) {
-    const port = Number(process.env.SMTP_PORT) || 587;
+  const st = smtpSettings();
+  if (st.host) {
+    const port = st.port;
     transporter = nodemailer.createTransport({
-      host: process.env.SMTP_HOST,
+      host: st.host,
       port,
       secure: port === 465,
       pool: true,            // reuse a few connections instead of reconnecting for every pass
       maxConnections: 3,
       maxMessages: 100,
-      auth: process.env.SMTP_USER ? { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS } : undefined,
+      auth: st.user ? { user: st.user, pass: st.pass } : undefined,
     });
   } else {
     // No SMTP configured: build the full email and save it to ./outbox for inspection.
@@ -285,4 +293,24 @@ async function sendPassEmail({ event, values, passCode, qrPng, uploadsDir, to })
   return info;
 }
 
-module.exports = { sendPassEmail, renderPassEmail, senderAddress, imageSize };
+// For the platform administrator: what the server uses to send email (never the password itself),
+// and whether the email service accepts the login. Nothing is sent.
+async function checkConnection() {
+  const raw = process.env.SMTP_PASS || '', st = smtpSettings();
+  const info = {
+    host: st.host || '(not set)', port: st.port, user: st.user || '(not set)', from: process.env.MAIL_FROM || '(not set)',
+    password: {
+      set: Boolean(raw), length: st.pass.length,
+      cleaned: raw !== st.pass, // spaces, line breaks or quotes were removed
+      looksLikeApiToken: /^zoho-enczapikey/i.test(st.pass),
+      hasSpaceInside: /\s/.test(st.pass),
+    },
+  };
+  if (!st.host) return { ...info, ok: false, error: 'SMTP_HOST is not set, so emails are saved on the server instead of sent.' };
+  const t = nodemailer.createTransport({ host: st.host, port: st.port, secure: st.port === 465, auth: st.user ? { user: st.user, pass: st.pass } : undefined, connectionTimeout: 15000 });
+  try { await t.verify(); return { ...info, ok: true }; }
+  catch (err) { return { ...info, ok: false, error: err.message }; }
+  finally { t.close(); }
+}
+
+module.exports = { sendPassEmail, renderPassEmail, senderAddress, imageSize, checkConnection };

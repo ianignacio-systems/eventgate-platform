@@ -476,6 +476,8 @@
         <p class="sub" style="margin:0">Sends this email, with your unsaved changes and a sample pass, to the address below.</p>
         <div class="pw-row"><input id="testTo" type="email" placeholder="you@example.com" style="flex:1;min-width:0;font:inherit;color:var(--ink);background:var(--surface-2);border:1.5px solid var(--line);border-radius:10px;padding:.55rem .7rem;min-height:44px"><button class="btn btn-primary" type="button" id="testSend">Send test</button></div>
         <p class="hint" id="testMsg" role="status"></p>
+        ${A.me && A.me.role === 'owner' ? `<div><button class="btn btn-quiet btn-sm" type="button" id="mailCheck">Check email connection</button>
+          <p class="help">For the platform administrator: tests the login to the email service without sending anything, and shows the settings the server is using.</p><div id="mailCheckOut"></div></div>` : ''}
       </section>`;
     },
 
@@ -768,6 +770,25 @@
       $('sumChecks').addEventListener('change', () => {
         draft.config.email.summaryFields = [...$('sumChecks').querySelectorAll('input:checked')].map((i) => i.value);
         changed();
+      });
+      if ($('mailCheck')) $('mailCheck').addEventListener('click', async () => {
+        const out = $('mailCheckOut');
+        out.innerHTML = '<p class="hint">Checking…</p>';
+        try {
+          const r = await A.api('/api/admin/email-check');
+          const p = r.password;
+          const tips = [];
+          if (!p.set) tips.push('SMTP_PASS is empty on this server.');
+          if (p.looksLikeApiToken) tips.push('The password starts with “Zoho-enczapikey”: that is the API token. Use the password from the SMTP tab instead.');
+          if (p.hasSpaceInside) tips.push('The password has a space inside it. Copy it again from the SMTP tab.');
+          if (p.cleaned) tips.push('Extra spaces, line breaks or quotation marks around a value were removed automatically.');
+          if (r.user !== 'emailapikey' && /zeptomail/i.test(r.host) && !r.user.includes('@')) tips.push('For ZeptoMail the username is usually exactly “emailapikey”.');
+          out.innerHTML = `<div class="notice ${r.ok ? 'info' : 'warn'}" style="margin-top:8px">
+            <b>${r.ok ? 'The email service accepted the login.' : 'The email service did not accept the login.'}</b>
+            ${r.error ? `<p style="margin:.3rem 0 0">${esc(r.error)}</p>` : ''}
+            <p style="margin:.4rem 0 0;font-size:.88rem">Server: ${esc(r.host)} · Port: ${esc(String(r.port))} · Username: ${esc(r.user)} · Password: ${p.set ? `${p.length} characters` : 'not set'}<br>Sender: ${esc(r.from)}</p>
+            ${tips.length ? `<ul style="margin:.4rem 0 0;padding-left:1.2rem">${tips.map((t) => `<li>${esc(t)}</li>`).join('')}</ul>` : ''}</div>`;
+        } catch (err) { out.innerHTML = `<p class="err">${esc(err.message)}</p>`; }
       });
       $('testSend').addEventListener('click', async () => {
         const to = $('testTo').value.trim();

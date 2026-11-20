@@ -13,7 +13,7 @@ const sharp = require('sharp');
 const EG = require('./lib/shared');
 const PH = require('./lib/ph');
 const { openDb, defaultCharts, slugify } = require('./db');
-const { sendPassEmail, renderPassEmail, senderAddress, imageSize } = require('./mailer');
+const { sendPassEmail, renderPassEmail, senderAddress, imageSize, checkConnection } = require('./mailer');
 
 const PORT = Number(process.env.PORT) || 3000;
 const PASS_SECRET = process.env.PASS_SECRET;
@@ -1012,6 +1012,37 @@ app.post('/api/admin/events/:id/email-test', testMailLimiter, requireEditor, wit
     res.status(502).json({ message: `The email could not be sent: ${err.message}` });
   }
 });
+
+// Sends the confirmation email again to everyone in the event whose email didn't go out (for example after
+// the email settings were wrong). A few at a time; stops early if the very first ones fail to sign in.
+const resending = new Set();
+app.post('/api/admin/events/:id/emails/resend', requireEditor, withEvent, async (req, res) => {
+  const ev = req.ev;
+  if (ev.config.email.send === false) return res.status(422).json({ message: 'This event doesn’t send confirmation emails.' });
+  if (resending.has(ev.id)) return res.status(409).json({ message: 'The emails are already being sent. Wait a moment and refresh.' });
+  const rows = db.prepare('SELECT * FROM registrations WHERE event_id = ? AND email IS NOT NULL AND email_sent_at IS NULL ORDER BY id').all(ev.id);
+  if (!rows.length) return res.json({ sent: 0, failed: 0, remaining: 0 });
+  resending.add(ev.id);
+  let sent = 0, failed = 0, error = '';
+  try {
+    for (let i = 0; i < rows.length; i += 3) {
+      const batch = await Promise.allSettled(rows.slice(i, i + 3).map((r) => sendPass(ev, r)));
+      for (const [j, b] of batch.entries()) {
+        if (b.status === 'fulfilled' && b.value) sent++;
+        else if (b.status === 'rejected') { failed++; error = error || b.reason.message; console.error(`[mail] Resending to ${rows[i + j].email} failed:`, b.reason.message); }
+      }
+      if (!sent && failed && /535|auth|Invalid login|ENOTFOUND|ECONNREFUSED|ETIMEDOUT/i.test(error)) break; // settings still wrong
+    }
+  } finally {
+    resending.delete(ev.id);
+  }
+  const remaining = db.prepare('SELECT COUNT(*) AS n FROM registrations WHERE event_id = ? AND email IS NOT NULL AND email_sent_at IS NULL').get(ev.id).n;
+  console.log(`[mail] Resent unsent emails for "${ev.slug}": ${sent} sent, ${remaining} still not sent.`);
+  bus.emit('change', { type: 'registered', eventId: ev.id });
+  res.json({ sent, failed, remaining, error });
+});
+
+app.get('/api/admin/email-check', testMailLimiter, requireOwner, async (req, res) => res.json(await checkConnection()));
 
 // Which event opens at the main address (and /checkin).
 app.get('/api/admin/platform', requireEditor, (req, res) => res.json({ homeEvent: req.auth.role === 'owner' ? getSetting('home_event') : '', senderAddress: senderAddress(), smtp: Boolean(process.env.SMTP_HOST) }));

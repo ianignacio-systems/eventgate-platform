@@ -660,6 +660,23 @@
     if (tab === 'dash') { if (switching || !stats) await refresh(); else { render(); if (window.Analysis) window.Analysis.rerender(); } }
   }
 
+  // Sends the confirmation email again to everyone in this event who didn't get it.
+  function resendUnsent(n) {
+    openDialog({
+      title: `Resend ${n === 1 ? 'the unsent email' : `${nf.format(n)} unsent emails`}?`,
+      body: `<p>${n === 1 ? 'One registrant hasn’t' : `${nf.format(n)} registrants haven’t`} received their confirmation email. First make sure the email settings work: send yourself a test from Settings › Email. Then resend.</p><p>Large lists take a minute or two. Keep this page open.</p>`,
+      okLabel: 'Resend now',
+      run: async () => {
+        const r = await post(`/api/admin/events/${cur.id}/emails/resend`, {});
+        const msg = r.remaining === 0 ? `All done: ${nf.format(r.sent)} ${r.sent === 1 ? 'email was' : 'emails were'} sent.`
+          : r.sent === 0 ? `No emails could be sent. The email settings still don’t work${r.error ? ` (${r.error})` : ''}.`
+          : `${nf.format(r.sent)} sent. ${nf.format(r.remaining)} still couldn’t be sent${r.error ? ` (${r.error})` : ''}. You can try again.`;
+        setTimeout(() => openDialog({ title: r.remaining === 0 ? 'Emails sent' : 'Some emails weren’t sent', body: `<p>${esc(msg)}</p>` }), 50);
+        refresh();
+      },
+    });
+  }
+
   // ---- live updates
   let refreshTimer = null;
   const scheduleRefresh = () => { clearTimeout(refreshTimer); refreshTimer = setTimeout(refresh, 400); };
@@ -735,7 +752,10 @@
     $('emailTile').hidden = Boolean(t.emailsOff);
     $('tMail').textContent = nf.format(t.emailsPending);
     $('emailTile').classList.toggle('warn', t.emailsPending > 0);
-    $('tMailNote').innerHTML = t.emailsPending > 0 ? `${ICON.warn}<span>Check the email settings on the server</span>` : '<span>All emails were sent</span>';
+    $('tMailNote').innerHTML = t.emailsPending > 0
+      ? `${ICON.warn}<span>Check the email settings on the server${canEdit() ? `, then <button type="button" class="linkbtn" id="mailResend">resend ${t.emailsPending === 1 ? 'it' : `all ${nf.format(t.emailsPending)}`}</button>` : ''}</span>`
+      : '<span>All emails were sent</span>';
+    if ($('mailResend')) $('mailResend').addEventListener('click', () => resendUnsent(t.emailsPending));
 
     const reg = stats.registrationsByDay;
     $('regSub').textContent = reg.length ? `New sign-ups each day, ${dayLabel(reg[0].day)} to ${dayLabel(reg[reg.length - 1].day)}` : 'New sign-ups each day';
